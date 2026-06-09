@@ -2,10 +2,19 @@ import pandas as pd
 import numpy as np
 import base64
 import io
+import calendar
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Any, Optional
 
 
 REQUIRED_COLUMNS = ['期间', '销售额', '类型']
+
+TIME_PERIOD_KEYWORDS = ['促销前', '促销期间', '促销后', '非促销期间', '预热期', '爆发期', '衰退期', '日常销售']
+
+ACTIVITY_COLORS = [
+    '#2E86AB', '#A23B72', '#F18F01', '#C73E1D',
+    '#3B1F2B', '#6A994E', '#577590', '#F94144'
+]
 
 DTYPE_CN_MAP = {
     'int64': '整数型 (64位)',
@@ -458,3 +467,162 @@ def filter_data(
         result = result[result['类型'].astype(str).isin(types)]
 
     return result
+
+
+def _is_time_period_label(label: str) -> bool:
+    for kw in TIME_PERIOD_KEYWORDS:
+        if kw in str(label):
+            return True
+    return False
+
+
+def get_activity_name_column(df: pd.DataFrame) -> Optional[str]:
+    activity_col_candidates = ['活动名称', '活动', '活动名', 'campaign', 'Campaign', '活动编号']
+    for col in activity_col_candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def extract_activity_dates(df: pd.DataFrame) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        'date_activity_map': {},
+        'activity_dates': {},
+        'activity_colors': {},
+        'activity_sales': {},
+        'available': False
+    }
+
+    if df is None or len(df) == 0:
+        return result
+
+    time_col = '期间' if '期间' in df.columns else None
+    if time_col is None:
+        return result
+
+    df_copy = df.copy()
+    parsed_dates = try_parse_datetime(df_copy[time_col])
+    if parsed_dates.isna().all():
+        return result
+    df_copy['_parsed_date'] = parsed_dates
+    df_copy = df_copy.dropna(subset=['_parsed_date'])
+
+    if len(df_copy) == 0:
+        return result
+
+    activity_col = get_activity_name_column(df_copy)
+
+    if activity_col:
+        activities = df_copy[activity_col].dropna().unique().tolist()
+        activities = [str(a) for a in activities if str(a).strip()]
+    elif '类型' in df_copy.columns:
+        types = df_copy['类型'].dropna().unique().tolist()
+        activities = [str(t) for t in types if not _is_time_period_label(str(t)) and str(t).strip()]
+        if not activities:
+            activities = [str(t) for t in types if str(t).strip() and str(t) != '非促销期间']
+        activity_col = '类型'
+    else:
+        return result
+
+    if not activities:
+        return result
+
+    for idx, activity in enumerate(activities):
+        result['activity_colors'][activity] = ACTIVITY_COLORS[idx % len(ACTIVITY_COLORS)]
+        result['activity_dates'][activity] = []
+        result['activity_sales'][activity] = 0.0
+
+    for _, row in df_copy.iterrows():
+        activity_val = str(row.get(activity_col, '')) if activity_col else ''
+        if activity_val not in result['activity_dates']:
+            continue
+        date_val = row['_parsed_date']
+        date_str = date_val.strftime('%Y-%m-%d')
+        if date_str not in result['date_activity_map']:
+            result['date_activity_map'][date_str] = []
+        if activity_val not in result['date_activity_map'][date_str]:
+            result['date_activity_map'][date_str].append(activity_val)
+        if date_str not in result['activity_dates'][activity_val]:
+            result['activity_dates'][activity_val].append(date_str)
+        sales_val = row.get('销售额', 0)
+        if pd.notna(sales_val):
+            result['activity_sales'][activity_val] += float(sales_val)
+
+    for activity in activities:
+        result['activity_dates'][activity].sort()
+
+    result['available'] = True
+    return result
+
+
+def get_monthly_activity_stats(
+    activity_data: Dict[str, Any],
+    year: int,
+    month: int
+) -> Dict[str, Any]:
+    stats: Dict[str, Any] = {
+        'activity_count': 0,
+        'activity_names': [],
+        'avg_sales': 0.0,
+        'total_sales': 0.0,
+        'active_days': 0,
+        'details': []
+    }
+
+    if not activity_data.get('available', False):
+        return stats
+
+    month_prefix = f'{year:04d}-{month:02d}'
+    month_activities = set()
+    month_dates = set()
+    total_sales = 0.0
+
+    for date_str, acts in activity_data.get('date_activity_map', {}).items():
+        if date_str.startswith(month_prefix):
+            month_dates.add(date_str)
+            for act in acts:
+                month_activities.add(act)
+
+    for activity in month_activities:
+        act_dates = [d for d in activity_data.get('activity_dates', {}).get(activity, []) if d.startswith(month_prefix)]
+        act_sales = activity_data.get('activity_sales', {}).get(activity, 0.0)
+        act_days = len(act_dates)
+        avg_sale = act_sales / act_days if act_days > 0 else 0
+        stats['details'].append({
+            'name': activity,
+            'days': act_days,
+            'total_sales': round(act_sales, 2),
+            'avg_daily_sales': round(avg_sale, 2),
+            'color': activity_data.get('activity_colors', {}).get(activity, '#2E86AB')
+        })
+        total_sales += act_sales
+
+    stats['activity_count'] = len(month_activities)
+    stats['activity_names'] = sorted(list(month_activities))
+    stats['active_days'] = len(month_dates)
+    stats['total_sales'] = round(total_sales, 2)
+    if len(month_dates) > 0:
+        stats['avg_sales'] = round(total_sales / len(month_dates), 2)
+    else:
+        stats['avg_sales'] = 0.0
+
+    stats['details'] = sorted(stats['details'], key=lambda x: x['total_sales'], reverse=True)
+
+    return stats
+
+
+def get_date_range(activity_data: Dict[str, Any]) -> Optional[Tuple[datetime, datetime]]:
+    if not activity_data.get('available', False):
+        return None
+
+    all_dates = list(activity_data.get('date_activity_map', {}).keys())
+    if not all_dates:
+        return None
+
+    sorted_dates = sorted(all_dates)
+    try:
+        min_date = datetime.strptime(sorted_dates[0], '%Y-%m-%d')
+        max_date = datetime.strptime(sorted_dates[-1], '%Y-%m-%d')
+        return (min_date, max_date)
+    except Exception:
+        return None

@@ -1,18 +1,23 @@
 import dash
-from dash import html, dcc, dash_table, Input, Output, State, callback
+from dash import html, dcc, dash_table, Input, Output, State, callback, ALL, MATCH
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import json
+from datetime import datetime
+import calendar as cal_module
 from data_processor import (
     process_uploaded_data, REQUIRED_COLUMNS,
     aggregate_by_time_granularity, calculate_growth_rate,
     detect_seasonality, detect_anomalies,
-    get_available_dimensions, filter_data
+    get_available_dimensions, filter_data,
+    extract_activity_dates, get_monthly_activity_stats,
+    get_date_range
 )
 from trend_charts import (
     create_line_chart, create_area_chart,
-    create_combined_chart
+    create_combined_chart, create_activity_calendar,
+    create_calendar_legend
 )
 from promo_evaluation import (
     evaluate_promo_activity, get_activity_list
@@ -37,6 +42,9 @@ app.layout = html.Div([
     dcc.Store(id='eval-result-store', data=None),
     dcc.Store(id='customer-analysis-store', data=None),
     dcc.Store(id='report-data-store', data=None),
+    dcc.Store(id='activity-calendar-data', data=None),
+    dcc.Store(id='calendar-current-month', data=None),
+    dcc.Store(id='calendar-highlight-date', data=None),
     dcc.Download(id='download-report-pdf'),
     dcc.Download(id='download-report-word'),
     html.Div(id='navbar-container'),
@@ -290,58 +298,97 @@ def trend_page():
             }
         ),
 
-        html.Div(id='trend-filters-container', style={
-            'backgroundColor': 'white',
-            'borderRadius': '10px',
-            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-            'padding': '25px',
-            'margin': '20px'
-        }),
-
         html.Div([
             html.Div([
-                html.H3('销售趋势折线图', style={'color': '#333', 'marginBottom': '15px'}),
-                dcc.Graph(id='trend-line-chart')
-            ], style={
-                'backgroundColor': 'white',
-                'borderRadius': '10px',
-                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-                'padding': '20px',
-                'margin': '20px 10px'
-            }),
+                html.Div(id='trend-filters-container', style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '25px',
+                    'margin': '20px 10px 20px 20px'
+                }),
+
+                html.Div([
+                    html.Div([
+                        html.H3('销售趋势折线图', style={'color': '#333', 'marginBottom': '15px'}),
+                        dcc.Graph(id='trend-line-chart')
+                    ], style={
+                        'backgroundColor': 'white',
+                        'borderRadius': '10px',
+                        'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                        'padding': '20px',
+                        'margin': '20px 10px'
+                    }),
+
+                    html.Div([
+                        html.H3('销售趋势面积图', style={'color': '#333', 'marginBottom': '15px'}),
+                        dcc.Graph(id='trend-area-chart')
+                    ], style={
+                        'backgroundColor': 'white',
+                        'borderRadius': '10px',
+                        'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                        'padding': '20px',
+                        'margin': '20px 10px'
+                    })
+                ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'}),
+
+                html.Div([
+                    html.Div([
+                        html.H3('销售趋势组合图（柱状+折线）', style={'color': '#333', 'marginBottom': '15px'}),
+                        dcc.Graph(id='trend-combined-chart')
+                    ], style={
+                        'backgroundColor': 'white',
+                        'borderRadius': '10px',
+                        'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                        'padding': '20px',
+                        'margin': '20px 10px'
+                    })
+                ], style={'display': 'grid', 'gridTemplateColumns': '1fr', 'gap': '0', 'marginTop': '0'}),
+
+                html.Div(id='trend-analysis-conclusion', style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '25px',
+                    'margin': '20px 10px 20px 20px'
+                })
+            ], style={'flex': '3', 'minWidth': '0'}),
 
             html.Div([
-                html.H3('销售趋势面积图', style={'color': '#333', 'marginBottom': '15px'}),
-                dcc.Graph(id='trend-area-chart')
-            ], style={
-                'backgroundColor': 'white',
-                'borderRadius': '10px',
-                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-                'padding': '20px',
-                'margin': '20px 10px'
-            })
-        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'}),
+                html.Div(id='calendar-container', style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '20px',
+                    'margin': '20px 20px 20px 10px'
+                }),
 
-        html.Div([
-            html.Div([
-                html.H3('销售趋势组合图（柱状+折线）', style={'color': '#333', 'marginBottom': '15px'}),
-                dcc.Graph(id='trend-combined-chart')
-            ], style={
-                'backgroundColor': 'white',
-                'borderRadius': '10px',
-                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-                'padding': '20px',
-                'margin': '20px 10px'
-            })
-        ], style={'display': 'grid', 'gridTemplateColumns': '1fr', 'gap': '0', 'marginTop': '0'}),
+                html.Div(id='calendar-legend-container', style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '15px 20px',
+                    'margin': '20px 20px 20px 10px'
+                }),
 
-        html.Div(id='trend-analysis-conclusion', style={
-            'backgroundColor': 'white',
-            'borderRadius': '10px',
-            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-            'padding': '25px',
-            'margin': '20px'
-        })
+                html.Div(id='calendar-stats-container', style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '20px',
+                    'margin': '20px 20px 20px 10px'
+                }),
+
+                html.Div(id='calendar-highlight-info', style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '20px',
+                    'margin': '20px 20px 20px 10px',
+                    'display': 'none'
+                })
+            ], style={'flex': '1.2', 'minWidth': '320px', 'maxWidth': '480px'})
+        ], style={'display': 'flex', 'flexWrap': 'wrap', 'alignItems': 'flex-start'})
     ])
 
 
@@ -3215,6 +3262,397 @@ def download_word(n_clicks, report_data, include_charts):
         print(f'Word 导出失败: {str(e)}')
         print(traceback.format_exc())
         return dash.no_update
+
+
+@callback(
+    Output('activity-calendar-data', 'data'),
+    Input('stored-data', 'data')
+)
+def init_activity_calendar_data(df_json):
+    if df_json is None:
+        return None
+    try:
+        df = pd.read_json(df_json, orient='split')
+        activity_data = extract_activity_dates(df)
+        return activity_data
+    except Exception:
+        return None
+
+
+@callback(
+    Output('calendar-current-month', 'data'),
+    Input('activity-calendar-data', 'data'),
+    prevent_initial_call=False
+)
+def init_calendar_month(activity_data):
+    if activity_data is None or not activity_data.get('available', False):
+        now = datetime.now()
+        return {'year': now.year, 'month': now.month}
+    date_range = get_date_range(activity_data)
+    if date_range is None:
+        now = datetime.now()
+        return {'year': now.year, 'month': now.month}
+    min_date, max_date = date_range
+    mid_date = min_date + (max_date - min_date) / 2
+    return {'year': mid_date.year, 'month': mid_date.month}
+
+
+@callback(
+    Output('calendar-container', 'children'),
+    Input('activity-calendar-data', 'data'),
+    Input('calendar-current-month', 'data'),
+    Input('calendar-highlight-date', 'data')
+)
+def render_calendar(activity_data, current_month, highlight_date):
+    if current_month is None:
+        return html.Div()
+    year = current_month.get('year')
+    month = current_month.get('month')
+    if year is None or month is None:
+        return html.Div()
+
+    fig = create_activity_calendar(activity_data, year, month, highlight_date)
+
+    date_range = get_date_range(activity_data) if activity_data else None
+    can_prev = True
+    can_next = True
+    if date_range is not None:
+        min_date, max_date = date_range
+        if month == 1:
+            prev_year, prev_month = year - 1, 12
+        else:
+            prev_year, prev_month = year, month - 1
+        if month == 12:
+            next_year, next_month = year + 1, 1
+        else:
+            next_year, next_month = year, month + 1
+        prev_dt = datetime(prev_year, prev_month, 1)
+        next_dt = datetime(next_year, next_month, 1)
+        can_prev = prev_dt >= datetime(min_date.year, min_date.month, 1)
+        can_next = next_dt <= datetime(max_date.year, max_date.month, 1)
+
+    children = []
+    children.append(html.Div([
+        html.Button(
+            '◀ 上月',
+            id='btn-calendar-prev',
+            n_clicks=0,
+            disabled=not can_prev,
+            style={
+                'padding': '6px 14px',
+                'backgroundColor': '#2E86AB' if can_prev else '#ccc',
+                'color': 'white',
+                'border': 'none',
+                'borderRadius': '5px',
+                'cursor': 'pointer' if can_prev else 'not-allowed',
+                'fontSize': '13px',
+                'fontWeight': 'bold'
+            }
+        ),
+        html.Div(
+            f'{year}年{month}月',
+            style={
+                'fontSize': '16px',
+                'fontWeight': 'bold',
+                'color': '#333'
+            }
+        ),
+        html.Button(
+            '下月 ▶',
+            id='btn-calendar-next',
+            n_clicks=0,
+            disabled=not can_next,
+            style={
+                'padding': '6px 14px',
+                'backgroundColor': '#2E86AB' if can_next else '#ccc',
+                'color': 'white',
+                'border': 'none',
+                'borderRadius': '5px',
+                'cursor': 'pointer' if can_next else 'not-allowed',
+                'fontSize': '13px',
+                'fontWeight': 'bold'
+            }
+        )
+    ], style={
+        'display': 'flex',
+        'justifyContent': 'space-between',
+        'alignItems': 'center',
+        'marginBottom': '12px'
+    }))
+
+    children.append(dcc.Graph(
+        id='activity-calendar-graph',
+        figure=fig,
+        config={'displayModeBar': False, 'responsive': True},
+        style={'width': '100%', 'margin': '0 auto'}
+    ))
+
+    return html.Div(children)
+
+
+@callback(
+    Output('calendar-current-month', 'data', allow_duplicate=True),
+    Input('btn-calendar-prev', 'n_clicks'),
+    Input('btn-calendar-next', 'n_clicks'),
+    State('calendar-current-month', 'data'),
+    prevent_initial_call=True
+)
+def change_calendar_month(prev_clicks, next_clicks, current_month):
+    ctx = dash.callback_context
+    if not ctx.triggered or current_month is None:
+        return dash.no_update
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    year = current_month.get('year')
+    month = current_month.get('month')
+
+    if trigger_id == 'btn-calendar-prev':
+        if month == 1:
+            return {'year': year - 1, 'month': 12}
+        else:
+            return {'year': year, 'month': month - 1}
+    elif trigger_id == 'btn-calendar-next':
+        if month == 12:
+            return {'year': year + 1, 'month': 1}
+        else:
+            return {'year': year, 'month': month + 1}
+    return dash.no_update
+
+
+@callback(
+    Output('calendar-legend-container', 'children'),
+    Input('activity-calendar-data', 'data')
+)
+def render_calendar_legend(activity_data):
+    if not activity_data or not activity_data.get('available', False):
+        return html.Div([
+            html.H4('📋 活动图例', style={'color': '#333', 'marginBottom': '10px', 'fontSize': '15px'}),
+            html.Div('暂无可识别的促销活动数据', style={'color': '#999', 'fontSize': '13px'})
+        ])
+
+    legend_items = create_calendar_legend(activity_data)
+
+    children = []
+    children.append(html.H4('📋 活动图例', style={'color': '#333', 'marginBottom': '12px', 'fontSize': '15px'}))
+
+    if not legend_items:
+        children.append(html.Div('暂无活动数据', style={'color': '#999', 'fontSize': '13px'}))
+    else:
+        for item in legend_items:
+            children.append(html.Div([
+                html.Div(style={
+                    'width': '16px',
+                    'height': '16px',
+                    'backgroundColor': item['color'],
+                    'borderRadius': '3px',
+                    'display': 'inline-block',
+                    'marginRight': '8px',
+                    'verticalAlign': 'middle'
+                }),
+                html.Span(f"{item['name']} ({item['days']}天)", style={
+                    'color': '#333',
+                    'fontSize': '13px',
+                    'verticalAlign': 'middle'
+                })
+            ], style={'padding': '5px 0'}))
+
+    return html.Div(children)
+
+
+@callback(
+    Output('calendar-stats-container', 'children'),
+    Input('activity-calendar-data', 'data'),
+    Input('calendar-current-month', 'data')
+)
+def render_calendar_stats(activity_data, current_month):
+    if current_month is None:
+        return html.Div()
+    year = current_month.get('year')
+    month = current_month.get('month')
+    if year is None or month is None:
+        return html.Div()
+
+    stats = get_monthly_activity_stats(activity_data, year, month) if activity_data else {
+        'activity_count': 0, 'activity_names': [], 'avg_sales': 0.0,
+        'total_sales': 0.0, 'active_days': 0, 'details': []
+    }
+
+    children = []
+    children.append(html.H4(
+        f'📊 {year}年{month}月 活动统计',
+        style={'color': '#333', 'marginBottom': '15px', 'fontSize': '15px'}
+    ))
+
+    children.append(html.Div([
+        html.Div([
+            html.Div('活动数量', style={'color': '#666', 'fontSize': '12px', 'marginBottom': '3px'}),
+            html.Div(str(stats.get('activity_count', 0)), style={
+                'fontSize': '22px', 'fontWeight': 'bold', 'color': '#2E86AB'
+            })
+        ], style={'textAlign': 'center', 'flex': '1', 'padding': '8px'}),
+        html.Div([
+            html.Div('活动天数', style={'color': '#666', 'fontSize': '12px', 'marginBottom': '3px'}),
+            html.Div(str(stats.get('active_days', 0)), style={
+                'fontSize': '22px', 'fontWeight': 'bold', 'color': '#A23B72'
+            })
+        ], style={'textAlign': 'center', 'flex': '1', 'padding': '8px'}),
+        html.Div([
+            html.Div('日均销售', style={'color': '#666', 'fontSize': '12px', 'marginBottom': '3px'}),
+            html.Div(f"¥{stats.get('avg_sales', 0):,.0f}", style={
+                'fontSize': '22px', 'fontWeight': 'bold', 'color': '#F18F01'
+            })
+        ], style={'textAlign': 'center', 'flex': '1', 'padding': '8px'})
+    ], style={
+        'display': 'flex',
+        'backgroundColor': '#f8f9fa',
+        'borderRadius': '8px',
+        'marginBottom': '12px'
+    }))
+
+    if stats.get('activity_count', 0) > 0:
+        children.append(html.Div([
+            html.Div('活动名称列表:', style={
+                'color': '#666', 'fontSize': '12px', 'marginBottom': '8px', 'fontWeight': 'bold'
+            }),
+            html.Div([
+                html.Span(act, style={
+                    'display': 'inline-block',
+                    'padding': '4px 10px',
+                    'marginRight': '6px',
+                    'marginBottom': '6px',
+                    'backgroundColor': detail['color'],
+                    'color': 'white',
+                    'borderRadius': '12px',
+                    'fontSize': '12px'
+                })
+                for act, detail in [(d['name'], d) for d in stats.get('details', [])]
+            ])
+        ]))
+
+        children.append(html.Hr(style={'margin': '12px 0', 'border': 'none', 'borderTop': '1px solid #eee'}))
+
+        for detail in stats.get('details', []):
+            children.append(html.Div([
+                html.Div([
+                    html.Div(style={
+                        'width': '10px',
+                        'height': '10px',
+                        'backgroundColor': detail['color'],
+                        'borderRadius': '2px',
+                        'display': 'inline-block',
+                        'marginRight': '6px'
+                    }),
+                    html.Strong(detail['name'], style={'color': '#333', 'fontSize': '13px'})
+                ], style={'marginBottom': '5px'}),
+                html.Div([
+                    html.Span(f"活动天数: {detail['days']}天", style={
+                        'color': '#666', 'fontSize': '12px', 'marginRight': '12px'
+                    }),
+                    html.Span(f"总销售额: ¥{detail['total_sales']:,.0f}", style={
+                        'color': '#666', 'fontSize': '12px', 'marginRight': '12px'
+                    }),
+                    html.Span(f"日均: ¥{detail['avg_daily_sales']:,.0f}", style={
+                        'color': '#666', 'fontSize': '12px'
+                    })
+                ])
+            ], style={'padding': '6px 0', 'borderBottom': '1px dashed #eee'}))
+    else:
+        children.append(html.Div('本月暂无促销活动', style={
+            'color': '#999', 'fontSize': '13px', 'textAlign': 'center', 'padding': '15px'
+        }))
+
+    return html.Div(children)
+
+
+@callback(
+    Output('calendar-highlight-date', 'data'),
+    Output('calendar-highlight-info', 'children'),
+    Output('calendar-highlight-info', 'style'),
+    Input('activity-calendar-graph', 'clickData'),
+    State('activity-calendar-data', 'data'),
+    prevent_initial_call=True
+)
+def handle_calendar_click(click_data, activity_data):
+    if not click_data or not click_data.get('points'):
+        return dash.no_update, dash.no_update, dash.no_update
+
+    point = click_data['points'][0]
+    customdata = point.get('customdata')
+    if not customdata:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    date_str = customdata[0] if isinstance(customdata, list) else str(customdata)
+
+    info_children = []
+    info_style = {
+        'backgroundColor': 'white',
+        'borderRadius': '10px',
+        'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+        'padding': '20px',
+        'margin': '20px 20px 20px 10px',
+        'display': 'block'
+    }
+
+    if activity_data and activity_data.get('available', False):
+        activities = activity_data.get('date_activity_map', {}).get(date_str, [])
+        activity_colors = activity_data.get('activity_colors', {})
+
+        info_children.append(html.H4(
+            f'📅 {date_str} 活动详情',
+            style={'color': '#333', 'marginBottom': '12px', 'fontSize': '15px'}
+        ))
+
+        if activities:
+            info_children.append(html.Div([
+                html.Div(f'当日活动 ({len(activities)}个):', style={
+                    'color': '#666', 'fontSize': '13px', 'marginBottom': '8px', 'fontWeight': 'bold'
+                }),
+                html.Div([
+                    html.Span(act, style={
+                        'display': 'inline-block',
+                        'padding': '5px 12px',
+                        'marginRight': '6px',
+                        'marginBottom': '6px',
+                        'backgroundColor': activity_colors.get(act, '#2E86AB'),
+                        'color': 'white',
+                        'borderRadius': '14px',
+                        'fontSize': '13px',
+                        'fontWeight': 'bold'
+                    })
+                    for act in activities
+                ])
+            ]))
+
+            for act in activities:
+                act_dates = activity_data.get('activity_dates', {}).get(act, [])
+                act_sales = activity_data.get('activity_sales', {}).get(act, 0.0)
+                act_days = len(act_dates)
+                avg_daily = act_sales / act_days if act_days > 0 else 0
+                info_children.append(html.Div([
+                    html.Hr(style={'margin': '12px 0', 'border': 'none', 'borderTop': '1px solid #eee'}),
+                    html.Strong(act, style={'color': '#333', 'fontSize': '14px'}),
+                    html.Div([
+                        html.Div(f"活动总天数: {act_days}天", style={
+                            'color': '#666', 'fontSize': '13px', 'margin': '4px 0'
+                        }),
+                        html.Div(f"活动总销售额: ¥{act_sales:,.0f}", style={
+                            'color': '#666', 'fontSize': '13px', 'margin': '4px 0'
+                        }),
+                        html.Div(f"日均销售额: ¥{avg_daily:,.0f}", style={
+                            'color': '#666', 'fontSize': '13px', 'margin': '4px 0'
+                        })
+                    ], style={'paddingLeft': '10px', 'marginTop': '5px'})
+                ]))
+        else:
+            info_children.append(html.Div('当日无促销活动', style={
+                'color': '#999', 'fontSize': '13px', 'textAlign': 'center', 'padding': '10px'
+            }))
+    else:
+        info_children.append(html.Div(f'📅 选中日期: {date_str}', style={
+            'color': '#333', 'fontSize': '14px'
+        }))
+
+    return date_str, html.Div(info_children), info_style
 
 
 if __name__ == '__main__':
