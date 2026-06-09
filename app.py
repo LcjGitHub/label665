@@ -478,6 +478,51 @@ def report_page():
                     }),
 
                     html.Div([
+                        html.Label('时间范围', style={
+                            'color': '#555', 'fontSize': '13px',
+                            'marginBottom': '6px', 'display': 'block'
+                        }),
+                        html.Div([
+                            html.Div([
+                                html.Label('开始日期', style={
+                                    'color': '#666', 'fontSize': '12px',
+                                    'marginBottom': '4px', 'display': 'block'
+                                }),
+                                dcc.DatePickerSingle(
+                                    id='report-start-date',
+                                    display_format='YYYY-MM-DD',
+                                    placeholder='选择开始日期',
+                                    style={'width': '100%'}
+                                )
+                            ], style={'flex': '1', 'marginRight': '10px'}),
+                            html.Div([
+                                html.Label('结束日期', style={
+                                    'color': '#666', 'fontSize': '12px',
+                                    'marginBottom': '4px', 'display': 'block'
+                                }),
+                                dcc.DatePickerSingle(
+                                    id='report-end-date',
+                                    display_format='YYYY-MM-DD',
+                                    placeholder='选择结束日期',
+                                    style={'width': '100%'}
+                                )
+                            ], style={'flex': '1'})
+                        ], style={'display': 'flex'}),
+                        html.Div([
+                            html.Button('选择全部数据', id='btn-report-reset-date', n_clicks=0, style={
+                                'marginTop': '8px',
+                                'backgroundColor': '#f0f0f0',
+                                'border': '1px solid #ddd',
+                                'padding': '6px 12px',
+                                'borderRadius': '4px',
+                                'cursor': 'pointer',
+                                'fontSize': '12px',
+                                'color': '#555'
+                            })
+                        ])
+                    ], style={'marginBottom': '18px'}),
+
+                    html.Div([
                         html.Label('客户聚类数量 (K)', style={
                             'color': '#555', 'fontSize': '13px',
                             'marginBottom': '6px', 'display': 'block'
@@ -497,7 +542,7 @@ def report_page():
                         dcc.Checklist(
                             id='report-include-charts',
                             options=[
-                                {'label': '在导出报告中嵌入图表（需安装 kaleido）', 'value': 'charts'}
+                                {'label': '在导出报告和预览中嵌入图表', 'value': 'charts'}
                             ],
                             value=['charts'] if KALEIDO_AVAILABLE else [],
                             labelStyle={'fontSize': '13px', 'color': '#555'},
@@ -512,7 +557,7 @@ def report_page():
                         }),
                         html.Div([
                             html.Span(
-                                f'📄 PDF {"✅" if REPORTLAB_AVAILABLE else "❌ (未安装 reportlab)"}',
+                                f'📄 PDF {"✅ 可用" if REPORTLAB_AVAILABLE else "❌ (未安装 PDF报告库)"}',
                                 style={
                                     'fontSize': '12px',
                                     'color': '#27ae60' if REPORTLAB_AVAILABLE else '#999',
@@ -520,7 +565,7 @@ def report_page():
                                 }
                             ),
                             html.Span(
-                                f'📝 Word {"✅" if DOCX_AVAILABLE else "❌ (未安装 python-docx)"}',
+                                f'📝 Word {"✅ 可用" if DOCX_AVAILABLE else "❌ (未安装 Word报告库)"}',
                                 style={
                                     'fontSize': '12px',
                                     'color': '#27ae60' if DOCX_AVAILABLE else '#999'
@@ -898,7 +943,7 @@ def render_navbar(pathname, stored_data):
 @callback(
     Output('page-content', 'children'),
     Input('url', 'pathname'),
-    State('stored-data', 'data')
+    Input('stored-data', 'data')
 )
 def display_page(pathname, stored_data):
     if pathname in ['/analysis', '/trend', '/evaluation', '/customer', '/report']:
@@ -2840,6 +2885,57 @@ def export_csv(n_clicks, stored):
 
 
 @callback(
+    Output('report-start-date', 'date'),
+    Output('report-end-date', 'date'),
+    Input('stored-data', 'data'),
+    Input('btn-report-reset-date', 'n_clicks'),
+    prevent_initial_call=False
+)
+def init_report_date_range(df_json, reset_clicks):
+    if df_json is None:
+        return None, None
+    try:
+        df = _load_dataframe(df_json)
+        if df is None or df.empty:
+            return None, None
+        time_col = '期间' if '期间' in df.columns else None
+        if time_col is None:
+            return None, None
+        dates = pd.to_datetime(df[time_col], errors='coerce').dropna()
+        if len(dates) == 0:
+            return None, None
+        start = dates.min().strftime('%Y-%m-%d')
+        end = dates.max().strftime('%Y-%m-%d')
+        return start, end
+    except Exception:
+        return None, None
+
+
+def _load_dataframe(data):
+    if data is None:
+        return None
+    if isinstance(data, pd.DataFrame):
+        return data.copy()
+    if isinstance(data, dict):
+        try:
+            if 'columns' in data and 'data' in data:
+                return pd.DataFrame(data['data'], columns=data['columns'])
+            else:
+                return pd.DataFrame(data)
+        except Exception:
+            return None
+    if isinstance(data, (list, str)):
+        try:
+            return pd.read_json(data, orient='split')
+        except Exception:
+            try:
+                return pd.read_json(data, orient='records')
+            except Exception:
+                return None
+    return None
+
+
+@callback(
     Output('report-sections-checklist', 'options'),
     Output('report-sections-checklist', 'value'),
     Output('report-template-info', 'children'),
@@ -2891,9 +2987,11 @@ def _make_report_data_serializable(report_data):
     State('report-sections-checklist', 'value'),
     State('report-cluster-k', 'value'),
     State('report-include-charts', 'value'),
+    State('report-start-date', 'date'),
+    State('report-end-date', 'date'),
     prevent_initial_call=True
 )
-def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_k, include_charts):
+def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_k, include_charts, start_date, end_date):
     if n_clicks is None or n_clicks == 0:
         welcome = html.Div([
             html.H3('👋 欢迎使用自动化报告中心', style={
@@ -2935,11 +3033,21 @@ def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_
         return error, None
 
     try:
-        df = pd.read_json(df_json, orient='split')
+        df = _load_dataframe(df_json)
+        if df is None:
+            return html.Div('❌ 数据解析失败：无法识别的数据格式', style={
+                'color': '#e74c3c', 'padding': '20px'
+            }), None
     except Exception as e:
         return html.Div(f'❌ 数据解析失败：{str(e)}', style={
             'color': '#e74c3c', 'padding': '20px'
         }), None
+
+    time_range = {}
+    if start_date:
+        time_range['start_date'] = start_date
+    if end_date:
+        time_range['end_date'] = end_date
 
     options = {
         'selected_sections': sections or [],
@@ -2948,10 +3056,30 @@ def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_
     }
 
     try:
-        report_data = prepare_report_data(df, template_type, options=options)
-        report_html = get_report_preview_html(report_data)
+        report_data = prepare_report_data(df, template_type, time_range=time_range, options=options)
+
+        charts = {}
+        if options.get('include_charts') and KALEIDO_AVAILABLE:
+            try:
+                charts = generate_report_charts(report_data)
+            except Exception:
+                charts = {}
+
+        report_html = get_report_preview_html(report_data, charts)
 
         serializable_data = _make_report_data_serializable(report_data)
+
+        time_display = ''
+        if start_date or end_date:
+            time_parts = []
+            if start_date:
+                time_parts.append(f'起始: {start_date}')
+            if end_date:
+                time_parts.append(f'结束: {end_date}')
+            time_display = f' | 时间范围：{" ~ ".join(time_parts)}'
+
+        selected_count = len(sections or [])
+        chart_display = f' | 包含图表：{"是" if charts else "否"}'
 
         preview_content = html.Div([
             html.Div([
@@ -2961,7 +3089,11 @@ def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_
                 html.Div([
                     html.Span('📄 ', style={'fontSize': '16px'}),
                     html.Strong(f'{report_data.get("template_info", {}).get("name", "分析报告")}', style={'color': '#333'}),
-                    html.Span(f' | 生成时间：{report_data.get("generated_at", "")}', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'})
+                    html.Span(f' | 生成时间：{report_data.get("generated_at", "")}', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'}),
+                    html.Span(f'{time_display}', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'}),
+                    html.Span(f' | 章节数：{selected_count}', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'}),
+                    html.Span(f'{chart_display}', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'}),
+                    html.Span(f' | 数据记录：{report_data.get("data_rows", 0)} 条', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'})
                 ], style={'fontSize': '14px'}),
                 html.Div([
                     html.Span('💡 提示：可点击上方按钮下载 PDF 或 Word 格式报告', style={
@@ -2978,7 +3110,7 @@ def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_
                 srcDoc=report_html,
                 style={
                     'width': '100%',
-                    'height': '700px',
+                    'height': '800px',
                     'border': '1px solid #e0e0e0',
                     'borderRadius': '8px',
                     'backgroundColor': '#f9f9f9'

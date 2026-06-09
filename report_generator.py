@@ -112,12 +112,16 @@ def prepare_report_data(
     options: Optional[Dict] = None
 ) -> Dict[str, Any]:
     options = options or {}
+    template = REPORT_TEMPLATES.get(template_type, REPORT_TEMPLATES['weekly'])
+    selected_sections = options.get('selected_sections') or template.get('sections', [])
+
     result = {
         'template_type': template_type,
-        'template_info': REPORT_TEMPLATES.get(template_type, REPORT_TEMPLATES['weekly']),
+        'template_info': template,
         'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'time_range': time_range or {},
         'options': options,
+        'selected_sections': selected_sections,
         'sections': {}
     }
 
@@ -125,23 +129,38 @@ def prepare_report_data(
         return result
 
     work_df = df.copy()
+
+    time_col = '期间' if '期间' in work_df.columns else None
+    if time_col and time_range:
+        try:
+            work_df[time_col] = pd.to_datetime(work_df[time_col], errors='coerce')
+            start_date = time_range.get('start_date')
+            end_date = time_range.get('end_date')
+            if start_date:
+                work_df = work_df[work_df[time_col] >= pd.to_datetime(start_date)]
+            if end_date:
+                work_df = work_df[work_df[time_col] <= pd.to_datetime(end_date)]
+        except Exception:
+            pass
+
     result['data_rows'] = len(work_df)
 
-    result['sections']['销售概览'] = _build_sales_overview(work_df, options)
+    if '销售概览' in selected_sections:
+        result['sections']['销售概览'] = _build_sales_overview(work_df, options)
 
-    if '趋势分析' in result['template_info']['sections']:
+    if '趋势分析' in selected_sections:
         result['sections']['趋势分析'] = _build_trend_analysis(work_df, options)
 
-    if '促销效果' in result['template_info']['sections']:
+    if '促销效果' in selected_sections:
         result['sections']['促销效果'] = _build_promo_analysis(work_df, options)
 
-    if '客户洞察' in result['template_info']['sections']:
+    if '客户洞察' in selected_sections:
         result['sections']['客户洞察'] = _build_customer_insight(work_df, options)
 
-    if '异常提醒' in result['template_info']['sections']:
+    if '异常提醒' in selected_sections:
         result['sections']['异常提醒'] = _build_anomaly_alert(work_df, options)
 
-    if '改进建议' in result['template_info']['sections']:
+    if '改进建议' in selected_sections:
         result['sections']['改进建议'] = _build_improvement_suggestions(work_df, result)
 
     return result
@@ -903,7 +922,14 @@ def generate_word_report(report_data: Dict, charts: Optional[Dict[str, bytes]] =
     return buffer.getvalue()
 
 
-def get_report_preview_html(report_data: Dict) -> str:
+def _img_bytes_to_base64(img_bytes: bytes) -> str:
+    if not img_bytes:
+        return ''
+    return 'data:image/png;base64,' + base64.b64encode(img_bytes).decode('utf-8')
+
+
+def get_report_preview_html(report_data: Dict, charts: Optional[Dict[str, bytes]] = None) -> str:
+    charts = charts or {}
     sections_html = []
 
     overview = report_data['sections'].get('销售概览', {})
@@ -911,10 +937,15 @@ def get_report_preview_html(report_data: Dict) -> str:
         kpi_html = ''
         for label in ['总销售额', '平均销售额', '最高销售额', '数据周期']:
             if label in overview:
+                val = overview[label]
+                if isinstance(val, (int, float)) and '销售额' in label:
+                    display_val = f'{val:,.2f}'
+                else:
+                    display_val = str(val)
                 kpi_html += f'''
-                <div style="flex:1; text-align:center; padding:15px; background:#eaf4fb; border-radius:8px; margin:5px;">
+                <div style="flex:1; min-width:140px; text-align:center; padding:15px; background:#eaf4fb; border-radius:8px; margin:5px;">
                     <div style="color:#666; font-size:13px;">{label}</div>
-                    <div style="font-size:24px; font-weight:bold; color:#2E86AB;">{overview[label]}</div>
+                    <div style="font-size:24px; font-weight:bold; color:#2E86AB;">{display_val}</div>
                 </div>'''
 
         rate_html = ''
@@ -969,10 +1000,19 @@ def get_report_preview_html(report_data: Dict) -> str:
                     </div>
                 </div>'''
 
+        chart_html = ''
+        if charts.get('sales_trend'):
+            img_src = _img_bytes_to_base64(charts['sales_trend'])
+            chart_html = f'''
+            <div style="text-align:center; margin-top:15px;">
+                <img src="{img_src}" style="max-width:100%; border:1px solid #eee; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1);" />
+            </div>'''
+
         sections_html.append(f'''
         <div class="report-section">
             <h2 style="color:#333; border-bottom:2px solid #2E86AB; padding-bottom:8px;">二、趋势分析</h2>
             {trend_items}
+            {chart_html}
         </div>''')
 
     promo = report_data['sections'].get('促销效果', {})
@@ -995,11 +1035,20 @@ def get_report_preview_html(report_data: Dict) -> str:
                 {rows}
             </table>'''
 
+        chart_html = ''
+        if charts.get('promo_comparison'):
+            img_src = _img_bytes_to_base64(charts['promo_comparison'])
+            chart_html = f'''
+            <div style="text-align:center; margin-top:15px;">
+                <img src="{img_src}" style="max-width:100%; border:1px solid #eee; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1);" />
+            </div>'''
+
         sections_html.append(f'''
         <div class="report-section">
             <h2 style="color:#333; border-bottom:2px solid #2E86AB; padding-bottom:8px;">三、促销效果分析</h2>
             <p style="color:#555;">活动总数: <strong>{promo.get("活动数量", 0)}</strong></p>
             {ranking_html}
+            {chart_html}
         </div>''')
 
     customer = report_data['sections'].get('客户洞察', {})
@@ -1025,6 +1074,15 @@ def get_report_preview_html(report_data: Dict) -> str:
                 {rows}
             </table>'''
 
+        chart_html = ''
+        chart_imgs = []
+        if charts.get('customer_segment'):
+            chart_imgs.append(f'<img src="{_img_bytes_to_base64(charts["customer_segment"])}" style="max-width:48%; border:1px solid #eee; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1); margin:5px;" />')
+        if charts.get('customer_heatmap'):
+            chart_imgs.append(f'<img src="{_img_bytes_to_base64(charts["customer_heatmap"])}" style="max-width:48%; border:1px solid #eee; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1); margin:5px;" />')
+        if chart_imgs:
+            chart_html = f'<div style="text-align:center; margin-top:15px; display:flex; flex-wrap:wrap; justify-content:center;">{"".join(chart_imgs)}</div>'
+
         sections_html.append(f'''
         <div class="report-section">
             <h2 style="color:#333; border-bottom:2px solid #2E86AB; padding-bottom:8px;">四、客户洞察分析</h2>
@@ -1034,6 +1092,7 @@ def get_report_preview_html(report_data: Dict) -> str:
                 聚类群体数: <strong>{customer.get("聚类数量", 0)}</strong>
             </p>
             {profile_html}
+            {chart_html}
         </div>''')
 
     anomaly = report_data['sections'].get('异常提醒', {})
@@ -1064,11 +1123,36 @@ def get_report_preview_html(report_data: Dict) -> str:
         </div>''')
 
     template_info = report_data.get('template_info', {})
+    time_range = report_data.get('time_range', {})
+    time_info = ''
+    if time_range:
+        parts = []
+        if time_range.get('start_date'):
+            parts.append(f'起始日期: {time_range["start_date"]}')
+        if time_range.get('end_date'):
+            parts.append(f'结束日期: {time_range["end_date"]}')
+        if parts:
+            time_info = f'<p style="text-align:center; color:#666; font-size:12px; margin-bottom:20px;">{" | ".join(parts)} | 共 {report_data.get("data_rows", 0)} 条数据</p>'
+
     html = f'''
-    <div style="font-family: Arial, 'Microsoft YaHei', sans-serif; padding:20px; max-width:900px; margin:0 auto; background:white; border-radius:10px;">
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            @media print {{
+                .report-section {{ page-break-inside: avoid; }}
+            }}
+        </style>
+    </head>
+    <body>
+    <div style="font-family: Arial, 'Microsoft YaHei', 'SimHei', sans-serif; padding:20px; max-width:950px; margin:0 auto; background:white; border-radius:10px;">
         <h1 style="text-align:center; color:#2E86AB; margin-bottom:5px;">{template_info.get("name", "销售分析报告")}</h1>
-        <p style="text-align:center; color:#999; font-size:13px; margin-bottom:25px;">生成时间：{report_data.get("generated_at", "")}</p>
+        <p style="text-align:center; color:#999; font-size:13px; margin-bottom:10px;">生成时间：{report_data.get("generated_at", "")}</p>
+        {time_info}
         {''.join(sections_html)}
         <div style="text-align:center; color:#999; margin-top:30px; padding:15px; border-top:1px solid #eee;">—— 报告预览 ——</div>
-    </div>'''
+    </div>
+    </body>
+    </html>'''
     return html
