@@ -55,10 +55,12 @@ def _generate_customer_data(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def prepare_customer_transactions(df: pd.DataFrame) -> pd.DataFrame:
+def prepare_customer_transactions(df: pd.DataFrame) -> Tuple[pd.DataFrame, bool]:
     cust_col = _find_column(df, CUSTOMER_ID_CANDIDATES)
+    is_simulated = False
     if cust_col is None:
-        return _generate_customer_data(df)
+        is_simulated = True
+        return _generate_customer_data(df), is_simulated
 
     tx_df = df.copy()
     tx_df = tx_df.rename(columns={cust_col: '客户ID'})
@@ -93,7 +95,7 @@ def prepare_customer_transactions(df: pd.DataFrame) -> pd.DataFrame:
     tx_df = tx_df.dropna(subset=['期间'])
     tx_df['客户ID'] = tx_df['客户ID'].astype(str).str.strip()
 
-    return tx_df
+    return tx_df, is_simulated
 
 
 def calculate_rfm(tx_df: pd.DataFrame) -> pd.DataFrame:
@@ -178,41 +180,53 @@ def perform_kmeans_clustering(
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(features)
 
-    best_n = n_clusters
+    target_n = n_clusters if (n_clusters and n_clusters >= 2 and n_clusters <= 8) else 4
     best_score = -1
+    auto_recommend = target_n
     inertia_values = []
     silhouette_scores = []
 
-    for k in range(2, min(8, len(rfm_df) // 10) + 1):
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(scaled_features)
-        inertia_values.append({'k': k, 'inertia': kmeans.inertia_})
-        if len(set(labels)) >= 2:
-            sil_score = silhouette_score(scaled_features, labels)
-            silhouette_scores.append({'k': k, 'silhouette_score': round(sil_score, 4)})
-            if sil_score > best_score:
-                best_score = sil_score
-                best_n = k
+    max_k = min(8, max(3, len(rfm_df) - 1))
+    for k in range(2, max_k + 1):
+        try:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(scaled_features)
+            inertia_values.append({'k': k, 'inertia': round(kmeans.inertia_, 2)})
+            n_unique = len(set(labels))
+            if n_unique >= 2 and len(rfm_df) > n_unique * 2:
+                sil_score = silhouette_score(scaled_features, labels)
+                silhouette_scores.append({'k': k, 'silhouette_score': round(sil_score, 4)})
+                if sil_score > best_score:
+                    best_score = sil_score
+                    auto_recommend = k
+        except Exception:
+            continue
 
-    if n_clusters and n_clusters >= 2 and n_clusters <= 8:
-        best_n = n_clusters
-
-    kmeans_final = KMeans(n_clusters=best_n, random_state=42, n_init=10)
+    kmeans_final = KMeans(n_clusters=target_n, random_state=42, n_init=10)
     cluster_labels = kmeans_final.fit_predict(scaled_features)
+
+    current_silhouette = None
+    n_unique_final = len(set(cluster_labels))
+    if n_unique_final >= 2 and len(rfm_df) > n_unique_final * 2:
+        try:
+            current_silhouette = round(silhouette_score(scaled_features, cluster_labels), 4)
+        except Exception:
+            current_silhouette = None
 
     result_df = rfm_df.copy()
     result_df['Cluster'] = cluster_labels
 
     cluster_centers = scaler.inverse_transform(kmeans_final.cluster_centers_)
     centers_df = pd.DataFrame(cluster_centers, columns=available_cols)
-    centers_df['Cluster'] = range(best_n)
+    centers_df['Cluster'] = range(target_n)
 
     cluster_info = {
-        'n_clusters': best_n,
+        'n_clusters': target_n,
+        'auto_recommend_k': auto_recommend,
         'cluster_centers': centers_df.to_dict('records'),
         'scaled_columns': available_cols,
-        'inertia': kmeans_final.inertia_,
-        'silhouette_score': round(best_score, 4) if best_score > 0 else None,
+        'inertia': round(kmeans_final.inertia_, 2),
+        'silhouette_score': current_silhouette,
         'elbow_data': inertia_values,
         'silhouette_data': silhouette_scores
     }
@@ -302,9 +316,11 @@ def generate_cluster_profiles(
             cluster_tx = tx_df[tx_df['客户ID'].isin(cluster_custs)]
 
             if len(cluster_tx) > 0:
+                cust_order_counts = cluster_tx.groupby('客户ID').size()
+                repurchase_customers = (cust_order_counts >= 2).sum()
                 repurchase_rate = round(
-                    len(cluster_tx) / len(cluster_custs), 2
-                ) if len(cluster_custs) > 0 else 0
+                    repurchase_customers / len(cluster_custs) * 100, 2
+                ) if len(cluster_custs) > 0 else 0.0
 
                 if '产品类别' in cluster_tx.columns:
                     top_cats = cluster_tx.groupby('产品类别')['销售额'].sum().sort_values(ascending=False).head(3)
@@ -318,7 +334,7 @@ def generate_cluster_profiles(
                 else:
                     profile['主要地区'] = []
 
-                profile['复购率(%)'] = round(min(repurchase_rate * 100, 100), 2)
+                profile['复购率(%)'] = repurchase_rate
                 profile['总订单数'] = int(len(cluster_tx))
                 profile['总销售额'] = round(cluster_tx['销售额'].sum(), 2)
 
@@ -334,7 +350,7 @@ def run_customer_analysis(
     df: pd.DataFrame,
     n_clusters: int = 4
 ) -> Dict[str, Any]:
-    tx_df = prepare_customer_transactions(df)
+    tx_df, is_simulated = prepare_customer_transactions(df)
 
     rfm = calculate_rfm(tx_df)
 
@@ -342,7 +358,8 @@ def run_customer_analysis(
         return {
             'success': False,
             'error': '客户数量不足，至少需要10个客户数据进行分析',
-            'transactions': tx_df
+            'transactions': tx_df,
+            'is_simulated': is_simulated
         }
 
     rfm_scored = score_rfm_segments(rfm)
@@ -366,7 +383,8 @@ def run_customer_analysis(
         'cluster_profiles': profiles,
         'segment_distribution': segment_distribution.to_dict('records'),
         'total_customers': len(clustered_named),
-        'total_transactions': len(tx_df)
+        'total_transactions': len(tx_df),
+        'is_simulated': is_simulated
     }
 
 

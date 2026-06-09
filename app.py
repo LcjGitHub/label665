@@ -1741,10 +1741,10 @@ def build_customer_config_content(df_json):
                 dcc.Dropdown(
                     id='scatter-x-axis',
                     options=[
-                        {'label': 'Recency (最近购买天数)', 'value': 'Recency'},
-                        {'label': 'Frequency (购买频次)', 'value': 'Frequency'},
-                        {'label': 'Monetary (消费总额)', 'value': 'Monetary'},
-                        {'label': 'AvgOrderValue (平均客单价)', 'value': 'AvgOrderValue'}
+                        {'label': '最近购买天数', 'value': 'Recency'},
+                        {'label': '购买频次', 'value': 'Frequency'},
+                        {'label': '消费总额', 'value': 'Monetary'},
+                        {'label': '平均客单价', 'value': 'AvgOrderValue'}
                     ],
                     value='Frequency',
                     style={'width': '100%'}
@@ -1759,10 +1759,10 @@ def build_customer_config_content(df_json):
                 dcc.Dropdown(
                     id='scatter-y-axis',
                     options=[
-                        {'label': 'Recency (最近购买天数)', 'value': 'Recency'},
-                        {'label': 'Frequency (购买频次)', 'value': 'Frequency'},
-                        {'label': 'Monetary (消费总额)', 'value': 'Monetary'},
-                        {'label': 'AvgOrderValue (平均客单价)', 'value': 'AvgOrderValue'}
+                        {'label': '最近购买天数', 'value': 'Recency'},
+                        {'label': '购买频次', 'value': 'Frequency'},
+                        {'label': '消费总额', 'value': 'Monetary'},
+                        {'label': '平均客单价', 'value': 'AvgOrderValue'}
                     ],
                     value='Monetary',
                     style={'width': '100%'}
@@ -1790,6 +1790,14 @@ def build_customer_config_content(df_json):
     return html.Div(children)
 
 
+COL_NAME_MAP = {
+    'Recency': '最近购买天数',
+    'Frequency': '购买频次',
+    'Monetary': '消费总额',
+    'AvgOrderValue': '平均客单价'
+}
+
+
 def build_customer_summary(analysis_result):
     if analysis_result is None or not analysis_result.get('success'):
         return html.Div()
@@ -1798,6 +1806,7 @@ def build_customer_summary(analysis_result):
     total_cust = analysis_result.get('total_customers', 0)
     total_tx = analysis_result.get('total_transactions', 0)
     cluster_info = analysis_result.get('cluster_info', {})
+    is_simulated = analysis_result.get('is_simulated', False)
 
     avg_order_value = analysis_result.get('rfm_data', pd.DataFrame())
     if not avg_order_value.empty:
@@ -1809,11 +1818,13 @@ def build_customer_summary(analysis_result):
         avg_frequency = 0
         avg_recency = 0
 
-    silhouette = cluster_info.get('silhouette_score', 'N/A')
+    silhouette = cluster_info.get('silhouette_score')
+    silhouette_display = silhouette if silhouette is not None else 'N/A'
 
-    return html.Div([
+    children = [
         html.Div([
             html.H3('客户分析概览', style={'color': '#333', 'marginBottom': '15px'}),
+
             html.Div([
                 html.Div([
                     html.H4('总客户数', style={'color': '#666', 'fontSize': '14px'}),
@@ -1842,7 +1853,7 @@ def build_customer_summary(analysis_result):
 
                 html.Div([
                     html.H4('轮廓系数', style={'color': '#666', 'fontSize': '14px'}),
-                    html.P(f'{silhouette}', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#16a085'})
+                    html.P(f'{silhouette_display}', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#16a085'})
                 ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#e6f8f6', 'borderRadius': '10px', 'flex': '1'})
             ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(150px, 1fr))', 'gap': '15px'})
         ], style={
@@ -1850,7 +1861,43 @@ def build_customer_summary(analysis_result):
             'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
             'padding': '25px', 'margin': '20px'
         })
-    ])
+    ]
+
+    if is_simulated:
+        children.insert(0, html.Div([
+            html.Div([
+                html.Strong('⚠️ 数据提示: ', style={'color': '#e67e22'}),
+                html.Span('上传数据未检测到客户标识字段，当前使用的是系统自动生成的模拟交易数据进行演示分析。',
+                          style={'color': '#d35400'})
+            ], style={
+                'padding': '12px 20px',
+                'backgroundColor': '#fff5e6',
+                'borderLeft': '4px solid #e67e22',
+                'borderRadius': '5px',
+                'fontSize': '14px'
+            })
+        ], style={'margin': '0 20px 10px 20px'}))
+
+    children.append(html.Div([
+        html.Button(
+            '📥 导出客户分群结果为 CSV',
+            id='btn-export-customer-csv',
+            n_clicks=0,
+            style={
+                'padding': '12px 30px',
+                'backgroundColor': '#27ae60',
+                'color': 'white',
+                'border': 'none',
+                'borderRadius': '6px',
+                'fontSize': '14px',
+                'fontWeight': 'bold',
+                'cursor': 'pointer',
+                'boxShadow': '0 2px 6px rgba(39, 174, 96, 0.4)'
+            }
+        )
+    ], style={'textAlign': 'right', 'marginTop': '15px'}))
+
+    return html.Div(children)
 
 
 def create_scatter_plot(analysis_result, x_col, y_col):
@@ -1870,10 +1917,13 @@ def create_scatter_plot(analysis_result, x_col, y_col):
 
     fig = go.Figure()
 
+    x_label = COL_NAME_MAP.get(x_col, x_col)
+    y_label = COL_NAME_MAP.get(y_col, y_col)
+
     clusters = sorted(clustered['Cluster'].unique())
     for i, cid in enumerate(clusters):
         cluster_data = clustered[clustered['Cluster'] == cid]
-        name = cluster_data['聚类名称'].iloc[0] if '聚类名称' in cluster_data.columns else f'Cluster {cid}'
+        name = cluster_data['聚类名称'].iloc[0] if '聚类名称' in cluster_data.columns else f'集群 {cid}'
         color = CLUSTER_COLORS[i % len(CLUSTER_COLORS)]
 
         fig.add_trace(go.Scatter(
@@ -1887,15 +1937,15 @@ def create_scatter_plot(analysis_result, x_col, y_col):
                 opacity=0.7,
                 line=dict(width=1, color='white')
             ),
-            text=[f"客户ID: {row['客户ID']}<br>{x_col}: {row[x_col]}<br>{y_col}: {row[y_col]}"
+            text=[f"客户ID: {row['客户ID']}<br>{x_label}: {row[x_col]}<br>{y_label}: {row[y_col]}"
                   for _, row in cluster_data.iterrows()],
             hovertemplate='%{text}<extra></extra>'
         ))
 
     fig.update_layout(
-        title=f'客户分群散点图 ({x_col} vs {y_col})',
-        xaxis_title=x_col,
-        yaxis_title=y_col,
+        title=f'客户分群散点图 ({x_label} vs {y_label})',
+        xaxis_title=x_label,
+        yaxis_title=y_label,
         plot_bgcolor='white',
         legend_title='客户群体',
         hovermode='closest',
@@ -1918,9 +1968,17 @@ def create_heatmap(analysis_result):
             'data': [],
             'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
 
-    metrics = ['平均Recency(天)', '平均购买频次', '平均消费总额', '平均客单价']
+    metrics = ['平均最近购买天数', '平均购买频次', '平均消费总额', '平均客单价']
     if profiles and profiles[0].get('复购率(%)'):
         metrics.append('复购率(%)')
+
+    profile_key_map = {
+        '平均最近购买天数': '平均Recency(天)',
+        '平均购买频次': '平均购买频次',
+        '平均消费总额': '平均消费总额',
+        '平均客单价': '平均客单价',
+        '复购率(%)': '复购率(%)'
+    }
 
     z = []
     x_labels = metrics
@@ -1930,7 +1988,8 @@ def create_heatmap(analysis_result):
         y_labels.append(p['聚类名称'])
         row = []
         for m in metrics:
-            row.append(p.get(m, 0))
+            key = profile_key_map.get(m, m)
+            row.append(p.get(key, 0))
         z.append(row)
 
     fig = go.Figure(data=go.Heatmap(
@@ -1971,7 +2030,7 @@ def create_radar_chart(analysis_result):
     fig = go.Figure()
 
     metrics = ['R均值', 'F均值', 'M均值']
-    metric_labels = ['Recency (R)', 'Frequency (F)', 'Monetary (M)']
+    metric_labels = ['最近购买 (R)', '购买频次 (F)', '消费金额 (M)']
 
     for i, p in enumerate(profiles):
         values = [p.get(m, 0) for m in metrics]
@@ -2006,6 +2065,46 @@ def create_radar_chart(analysis_result):
     return fig
 
 
+def create_segment_pie_chart(analysis_result):
+    if analysis_result is None or not analysis_result.get('success'):
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    segments = analysis_result.get('segment_distribution', [])
+    if not segments:
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    labels = [s['客户分群'] for s in segments]
+    values = [s['客户数量'] for s in segments]
+    pcts = [s['占比(%)'] for s in segments]
+
+    pie_colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#27ae60', '#8e44ad', '#16a085', '#e67e22']
+
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values,
+        textinfo='label+percent',
+        marker=dict(colors=pie_colors[:len(labels)], line=dict(color='white', width=2)),
+        hole=0.4,
+        hovertemplate='<b>%{label}</b><br>客户数量: %{value} 人<br>占比: %{percent}<extra></extra>'
+    )])
+
+    fig.update_layout(
+        title='RFM 八分群客户分布',
+        showlegend=True,
+        legend_title='客户分群',
+        title_x=0.5,
+        plot_bgcolor='white',
+        font=dict(size=12),
+        margin=dict(l=20, r=20, t=60, b=20)
+    )
+
+    return fig
+
+
 def build_visualization_content(analysis_result, x_col, y_col):
     if analysis_result is None or not analysis_result.get('success'):
         return html.Div()
@@ -2022,8 +2121,8 @@ def build_visualization_content(analysis_result, x_col, y_col):
             }),
 
             html.Div([
-                html.H3('群体特征热力图', style={'color': '#333', 'marginBottom': '15px'}),
-                dcc.Graph(id='customer-heatmap', figure=create_heatmap(analysis_result))
+                html.H3('RFM 八分群客户分布', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='customer-segment-pie', figure=create_segment_pie_chart(analysis_result))
             ], style={
                 'backgroundColor': 'white', 'borderRadius': '10px',
                 'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
@@ -2033,6 +2132,15 @@ def build_visualization_content(analysis_result, x_col, y_col):
 
         html.Div([
             html.Div([
+                html.H3('群体特征热力图', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='customer-heatmap', figure=create_heatmap(analysis_result))
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px 10px'
+            }),
+
+            html.Div([
                 html.H3('RFM 雷达图对比', style={'color': '#333', 'marginBottom': '15px'}),
                 dcc.Graph(id='customer-radar-chart', figure=create_radar_chart(analysis_result))
             ], style={
@@ -2040,7 +2148,7 @@ def build_visualization_content(analysis_result, x_col, y_col):
                 'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
                 'padding': '20px', 'margin': '20px 10px'
             })
-        ], style={'display': 'grid', 'gridTemplateColumns': '1fr', 'gap': '0'})
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'})
     ])
 
 
@@ -2108,7 +2216,7 @@ def build_profile_cards(analysis_result):
 
                 html.Div([
                     html.Div([
-                        html.Span('消费总额', style={'color': '#666', 'fontSize': '12px', 'display': 'block'}),
+                        html.Span('平均消费总额', style={'color': '#666', 'fontSize': '12px', 'display': 'block'}),
                         html.Strong(f'¥{p["平均消费总额"]:,.0f}', style={'color': '#333', 'fontSize': '14px'})
                     ], style={'flex': '1', 'textAlign': 'center', 'padding': '5px'}),
                     html.Div([
@@ -2198,7 +2306,7 @@ def build_cluster_detail(analysis_result, cluster_id):
         {'指标': '客户群体名称', '数值': target['聚类名称']},
         {'指标': '客户数量', '数值': f"{target['客户数量']} 人"},
         {'指标': '客户占比', '数值': f"{target['客户占比(%)']}%"},
-        {'指标': '平均 Recency (最近购买天数)', '数值': f"{target['平均Recency(天)']} 天"},
+        {'指标': '平均最近购买天数', '数值': f"{target['平均Recency(天)']} 天"},
         {'指标': '平均购买频次', '数值': f"{target['平均购买频次']} 次"},
         {'指标': '平均消费总额', '数值': f"¥{target['平均消费总额']:,.2f}"},
         {'指标': '平均客单价', '数值': f"¥{target['平均客单价']:,.2f}"}
@@ -2284,11 +2392,11 @@ def build_cluster_detail(analysis_result, cluster_id):
 
     rfm_scores = []
     if target.get('R均值'):
-        rfm_scores.append({'维度': 'Recency (最近购买)', '得分': round(target['R均值'] * 20, 1), '满分': 100})
+        rfm_scores.append({'维度': '最近购买 (R)', '得分': round(target['R均值'] * 20, 1), '满分': 100})
     if target.get('F均值'):
-        rfm_scores.append({'维度': 'Frequency (购买频次)', '得分': round(target['F均值'] * 20, 1), '满分': 100})
+        rfm_scores.append({'维度': '购买频次 (F)', '得分': round(target['F均值'] * 20, 1), '满分': 100})
     if target.get('M均值'):
-        rfm_scores.append({'维度': 'Monetary (消费能力)', '得分': round(target['M均值'] * 20, 1), '满分': 100})
+        rfm_scores.append({'维度': '消费金额 (M)', '得分': round(target['M均值'] * 20, 1), '满分': 100})
 
     if rfm_scores:
         rfm_bars = []
@@ -2327,25 +2435,6 @@ def build_cluster_detail(analysis_result, cluster_id):
             'padding': '20px 25px',
             'margin': '20px'
         }))
-
-    children.append(html.Div([
-        html.Button(
-            '📥 导出所有客户分群结果为 CSV',
-            id='btn-export-customer-csv',
-            n_clicks=0,
-            style={
-                'padding': '12px 30px',
-                'backgroundColor': '#27ae60',
-                'color': 'white',
-                'border': 'none',
-                'borderRadius': '6px',
-                'fontSize': '14px',
-                'fontWeight': 'bold',
-                'cursor': 'pointer',
-                'boxShadow': '0 2px 6px rgba(39, 174, 96, 0.4)'
-            }
-        )
-    ], style={'textAlign': 'center', 'padding': '10px 20px 30px 20px'}))
 
     return html.Div(children)
 
@@ -2404,6 +2493,7 @@ def run_analysis(n_clicks, df_json, n_clusters, x_col, y_col):
 
         serializable = {
             'success': True,
+            'is_simulated': result.get('is_simulated', False),
             'cluster_profiles': result.get('cluster_profiles', []),
             'cluster_info': result.get('cluster_info', {}),
             'segment_distribution': result.get('segment_distribution', []),
