@@ -20,6 +20,11 @@ from promo_evaluation import (
 from customer_analysis import (
     run_customer_analysis, export_clustering_csv
 )
+from report_generator import (
+    REPORT_TEMPLATES, prepare_report_data, generate_report_charts,
+    generate_pdf_report, generate_word_report, get_report_preview_html,
+    REPORTLAB_AVAILABLE, DOCX_AVAILABLE, KALEIDO_AVAILABLE
+)
 
 app = dash.Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -31,6 +36,9 @@ app.layout = html.Div([
     dcc.Store(id='stored-quality-report', data=None),
     dcc.Store(id='eval-result-store', data=None),
     dcc.Store(id='customer-analysis-store', data=None),
+    dcc.Store(id='report-data-store', data=None),
+    dcc.Download(id='download-report-pdf'),
+    dcc.Download(id='download-report-word'),
     html.Div(id='navbar-container'),
     html.Div(id='page-content')
 ], style={
@@ -46,6 +54,7 @@ def navbar(current_path, data_valid):
     trend_active = current_path == '/trend'
     evaluation_active = current_path == '/evaluation'
     customer_active = current_path == '/customer'
+    report_active = current_path == '/report'
 
     if data_valid:
         analysis_link = dcc.Link('促销分析', href='/analysis', style={
@@ -80,6 +89,15 @@ def navbar(current_path, data_valid):
             'textDecoration': 'none',
             'padding': '15px 25px',
             'backgroundColor': '#2E86AB' if customer_active else 'transparent',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'marginRight': '10px'
+        })
+        report_link = dcc.Link('报告中心', href='/report', style={
+            'color': 'white',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#F18F01' if report_active else 'transparent',
             'borderRadius': '5px',
             'fontWeight': 'bold'
         })
@@ -121,6 +139,16 @@ def navbar(current_path, data_valid):
             'backgroundColor': '#333',
             'borderRadius': '5px',
             'fontWeight': 'bold',
+            'cursor': 'not-allowed',
+            'marginRight': '10px'
+        })
+        report_link = html.Span('报告中心', title='请先上传并验证数据', style={
+            'color': '#888',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#333',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
             'cursor': 'not-allowed'
         })
 
@@ -144,7 +172,8 @@ def navbar(current_path, data_valid):
             analysis_link,
             trend_link,
             evaluation_link,
-            customer_link
+            customer_link,
+            report_link
         ], style={
             'display': 'flex',
             'alignItems': 'center',
@@ -370,6 +399,197 @@ def customer_page():
         html.Div(id='customer-profiles-container'),
 
         html.Div(id='customer-detail-container')
+    ])
+
+
+def report_page():
+    return html.Div([
+        html.H1(
+            '📊 自动化报告中心',
+            style={
+                'textAlign': 'center',
+                'color': '#F18F01',
+                'marginBottom': '30px',
+                'marginTop': '30px'
+            }
+        ),
+
+        html.Div([
+            html.H3('报告生成配置', style={'color': '#333', 'marginBottom': '20px'}),
+
+            html.Div([
+                html.Div([
+                    html.Label('选择报告模板', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '8px', 'display': 'block', 'fontSize': '14px'
+                    }),
+                    dcc.RadioItems(
+                        id='report-template-select',
+                        options=[
+                            {'label': f'📋 {v["name"]} — {v["description"]}', 'value': k}
+                            for k, v in REPORT_TEMPLATES.items()
+                        ],
+                        value='weekly',
+                        labelStyle={
+                            'display': 'block',
+                            'padding': '12px 15px',
+                            'margin': '8px 0',
+                            'backgroundColor': '#fafafa',
+                            'borderRadius': '8px',
+                            'border': '1px solid #e0e0e0',
+                            'cursor': 'pointer',
+                            'fontSize': '14px'
+                        },
+                        inputStyle={'marginRight': '10px'}
+                    )
+                ], style={'flex': '1', 'minWidth': '300px', 'marginRight': '30px'}),
+
+                html.Div([
+                    html.Label('报告章节选择', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '8px', 'display': 'block', 'fontSize': '14px'
+                    }),
+                    dcc.Checklist(
+                        id='report-sections-checklist',
+                        options=[],
+                        value=[],
+                        labelStyle={
+                            'display': 'block',
+                            'padding': '6px 0',
+                            'fontSize': '13px',
+                            'color': '#555'
+                        },
+                        inputStyle={'marginRight': '8px'}
+                    ),
+                    html.Div(id='report-template-info', style={
+                        'marginTop': '15px',
+                        'padding': '10px',
+                        'backgroundColor': '#fff8e6',
+                        'borderRadius': '6px',
+                        'fontSize': '12px',
+                        'color': '#d35400'
+                    })
+                ], style={'flex': '1', 'minWidth': '280px'}),
+
+                html.Div([
+                    html.Label('分析参数设置', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '12px', 'display': 'block', 'fontSize': '14px'
+                    }),
+
+                    html.Div([
+                        html.Label('客户聚类数量 (K)', style={
+                            'color': '#555', 'fontSize': '13px',
+                            'marginBottom': '6px', 'display': 'block'
+                        }),
+                        dcc.Slider(
+                            id='report-cluster-k',
+                            min=2, max=8, value=4, step=1,
+                            marks={i: f'{i}' for i in range(2, 9)}
+                        )
+                    ], style={'marginBottom': '18px'}),
+
+                    html.Div([
+                        html.Label('包含图表', style={
+                            'color': '#555', 'fontSize': '13px',
+                            'marginBottom': '6px', 'display': 'block'
+                        }),
+                        dcc.Checklist(
+                            id='report-include-charts',
+                            options=[
+                                {'label': '在导出报告中嵌入图表（需安装 kaleido）', 'value': 'charts'}
+                            ],
+                            value=['charts'] if KALEIDO_AVAILABLE else [],
+                            labelStyle={'fontSize': '13px', 'color': '#555'},
+                            inputStyle={'marginRight': '8px'}
+                        )
+                    ], style={'marginBottom': '18px'}),
+
+                    html.Div([
+                        html.Label('导出格式', style={
+                            'color': '#555', 'fontSize': '13px',
+                            'marginBottom': '6px', 'display': 'block'
+                        }),
+                        html.Div([
+                            html.Span(
+                                f'📄 PDF {"✅" if REPORTLAB_AVAILABLE else "❌ (未安装 reportlab)"}',
+                                style={
+                                    'fontSize': '12px',
+                                    'color': '#27ae60' if REPORTLAB_AVAILABLE else '#999',
+                                    'marginRight': '20px'
+                                }
+                            ),
+                            html.Span(
+                                f'📝 Word {"✅" if DOCX_AVAILABLE else "❌ (未安装 python-docx)"}',
+                                style={
+                                    'fontSize': '12px',
+                                    'color': '#27ae60' if DOCX_AVAILABLE else '#999'
+                                }
+                            )
+                        ])
+                    ])
+                ], style={'flex': '1', 'minWidth': '280px'})
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'alignItems': 'flex-start'}),
+
+            html.Div([
+                html.Button(
+                    '🔄 生成报告预览',
+                    id='btn-generate-report',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': '#F18F01', 'color': 'white',
+                        'padding': '12px 40px', 'border': 'none',
+                        'borderRadius': '6px', 'fontWeight': 'bold',
+                        'fontSize': '15px', 'cursor': 'pointer',
+                        'boxShadow': '0 2px 6px rgba(241, 143, 1, 0.4)',
+                        'marginRight': '15px'
+                    }
+                ),
+                html.Button(
+                    '📥 下载 PDF 报告',
+                    id='btn-download-pdf',
+                    n_clicks=0,
+                    disabled=not REPORTLAB_AVAILABLE,
+                    style={
+                        'backgroundColor': '#2E86AB' if REPORTLAB_AVAILABLE else '#aaa',
+                        'color': 'white',
+                        'padding': '12px 30px', 'border': 'none',
+                        'borderRadius': '6px', 'fontWeight': 'bold',
+                        'fontSize': '14px',
+                        'cursor': 'pointer' if REPORTLAB_AVAILABLE else 'not-allowed',
+                        'marginRight': '10px'
+                    }
+                ),
+                html.Button(
+                    '📥 下载 Word 报告',
+                    id='btn-download-word',
+                    n_clicks=0,
+                    disabled=not DOCX_AVAILABLE,
+                    style={
+                        'backgroundColor': '#27ae60' if DOCX_AVAILABLE else '#aaa',
+                        'color': 'white',
+                        'padding': '12px 30px', 'border': 'none',
+                        'borderRadius': '6px', 'fontWeight': 'bold',
+                        'fontSize': '14px',
+                        'cursor': 'pointer' if DOCX_AVAILABLE else 'not-allowed'
+                    }
+                )
+            ], style={'textAlign': 'center', 'marginTop': '25px'})
+        ], style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '30px',
+            'margin': '20px'
+        }),
+
+        html.Div(id='report-preview-container', style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '30px',
+            'margin': '20px'
+        })
     ])
 
 
@@ -681,7 +901,7 @@ def render_navbar(pathname, stored_data):
     State('stored-data', 'data')
 )
 def display_page(pathname, stored_data):
-    if pathname in ['/analysis', '/trend', '/evaluation', '/customer']:
+    if pathname in ['/analysis', '/trend', '/evaluation', '/customer', '/report']:
         if stored_data is None:
             return html.Div([
                 html.Div([
@@ -718,8 +938,10 @@ def display_page(pathname, stored_data):
             return trend_page()
         elif pathname == '/evaluation':
             return evaluation_page()
-        else:
+        elif pathname == '/customer':
             return customer_page()
+        else:
+            return report_page()
     else:
         return upload_page()
 
@@ -2614,6 +2836,252 @@ def export_csv(n_clicks, stored):
         csv_str = clustered.to_csv(index=False, encoding='utf-8-sig')
         return dict(content=csv_str, filename='客户分群结果.csv', type='text/csv')
     except Exception:
+        return dash.no_update
+
+
+@callback(
+    Output('report-sections-checklist', 'options'),
+    Output('report-sections-checklist', 'value'),
+    Output('report-template-info', 'children'),
+    Input('report-template-select', 'value')
+)
+def update_report_sections(template_type):
+    template = REPORT_TEMPLATES.get(template_type, REPORT_TEMPLATES['weekly'])
+    sections = template.get('sections', [])
+    options = [{'label': f'✅ {s}', 'value': s} for s in sections]
+    info = f'📌 当前模板：{template["name"]} | 包含章节：{"、".join(sections)}'
+    return options, sections.copy(), info
+
+
+def _make_report_data_serializable(report_data):
+    import json as _json
+    try:
+        _json.dumps(report_data, ensure_ascii=False)
+        return report_data
+    except (TypeError, ValueError):
+        def _clean(obj):
+            if isinstance(obj, dict):
+                return {k: _clean(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [_clean(i) for i in obj]
+            elif isinstance(obj, (np.integer,)):
+                return int(obj)
+            elif isinstance(obj, (np.floating,)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, pd.DataFrame):
+                return obj.to_dict('records')
+            elif hasattr(obj, 'item'):
+                try:
+                    return obj.item()
+                except Exception:
+                    return str(obj)
+            else:
+                return str(obj) if obj is not None else None
+        return _clean(report_data)
+
+
+@callback(
+    Output('report-preview-container', 'children'),
+    Output('report-data-store', 'data'),
+    Input('btn-generate-report', 'n_clicks'),
+    State('stored-data', 'data'),
+    State('report-template-select', 'value'),
+    State('report-sections-checklist', 'value'),
+    State('report-cluster-k', 'value'),
+    State('report-include-charts', 'value'),
+    prevent_initial_call=True
+)
+def generate_report_preview(n_clicks, df_json, template_type, sections, cluster_k, include_charts):
+    if n_clicks is None or n_clicks == 0:
+        welcome = html.Div([
+            html.H3('👋 欢迎使用自动化报告中心', style={
+                'color': '#F18F01', 'textAlign': 'center',
+                'marginBottom': '20px'
+            }),
+            html.P('请配置上方的报告参数，然后点击「生成报告预览」按钮开始生成报告。', style={
+                'textAlign': 'center', 'color': '#666', 'fontSize': '15px'
+            }),
+            html.Div([
+                html.Div([
+                    html.Strong('📋 支持的报告模板：', style={'color': '#333'}),
+                    html.Span('日报、周报、月报，涵盖不同粒度的经营分析', style={'color': '#555'})
+                ], style={'padding': '10px 0'}),
+                html.Div([
+                    html.Strong('📊 报告内容包含：', style={'color': '#333'}),
+                    html.Span('销售概览、趋势分析、促销效果、客户洞察、改进建议等多个章节', style={'color': '#555'})
+                ], style={'padding': '10px 0'}),
+                html.Div([
+                    html.Strong('📄 导出格式：', style={'color': '#333'}),
+                    html.Span('支持 PDF 和 Word 两种格式，图表可自动嵌入文档', style={'color': '#555'})
+                ], style={'padding': '10px 0'})
+            ], style={
+                'maxWidth': '500px', 'margin': '30px auto',
+                'padding': '20px', 'backgroundColor': '#fafafa',
+                'borderRadius': '10px', 'fontSize': '14px'
+            })
+        ], style={'padding': '40px 20px'})
+        return welcome, None
+
+    if df_json is None:
+        error = html.Div([
+            html.Div('⚠️ 请先上传有效数据', style={
+                'color': '#e74c3c', 'padding': '30px',
+                'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                'textAlign': 'center', 'fontSize': '16px'
+            })
+        ])
+        return error, None
+
+    try:
+        df = pd.read_json(df_json, orient='split')
+    except Exception as e:
+        return html.Div(f'❌ 数据解析失败：{str(e)}', style={
+            'color': '#e74c3c', 'padding': '20px'
+        }), None
+
+    options = {
+        'selected_sections': sections or [],
+        'n_clusters': cluster_k or 4,
+        'include_charts': bool(include_charts and 'charts' in include_charts)
+    }
+
+    try:
+        report_data = prepare_report_data(df, template_type, options=options)
+        report_html = get_report_preview_html(report_data)
+
+        serializable_data = _make_report_data_serializable(report_data)
+
+        preview_content = html.Div([
+            html.Div([
+                html.H3('✅ 报告生成成功！', style={
+                    'color': '#27ae60', 'margin': '0 0 10px 0'
+                }),
+                html.Div([
+                    html.Span('📄 ', style={'fontSize': '16px'}),
+                    html.Strong(f'{report_data.get("template_info", {}).get("name", "分析报告")}', style={'color': '#333'}),
+                    html.Span(f' | 生成时间：{report_data.get("generated_at", "")}', style={'color': '#666', 'fontSize': '13px', 'marginLeft': '10px'})
+                ], style={'fontSize': '14px'}),
+                html.Div([
+                    html.Span('💡 提示：可点击上方按钮下载 PDF 或 Word 格式报告', style={
+                        'color': '#F18F01', 'fontSize': '13px'
+                    })
+                ], style={'marginTop': '8px'})
+            ], style={
+                'padding': '15px 20px',
+                'backgroundColor': '#e8f8f0',
+                'borderRadius': '8px',
+                'marginBottom': '20px'
+            }),
+            html.Iframe(
+                srcDoc=report_html,
+                style={
+                    'width': '100%',
+                    'height': '700px',
+                    'border': '1px solid #e0e0e0',
+                    'borderRadius': '8px',
+                    'backgroundColor': '#f9f9f9'
+                }
+            )
+        ])
+
+        return preview_content, serializable_data
+
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        error_content = html.Div([
+            html.H4('❌ 报告生成失败', style={'color': '#e74c3c', 'marginBottom': '10px'}),
+            html.Div(f'错误信息：{str(e)}', style={'color': '#333', 'marginBottom': '10px'}),
+            html.Details([
+                html.Summary('详细错误信息（点击展开）', style={'color': '#666', 'cursor': 'pointer'}),
+                html.Pre(error_detail, style={
+                    'backgroundColor': '#f8f9fa',
+                    'padding': '15px',
+                    'borderRadius': '5px',
+                    'fontSize': '12px',
+                    'overflowX': 'auto',
+                    'color': '#c7254e'
+                })
+            ])
+        ], style={'padding': '20px'})
+        return error_content, None
+
+
+@callback(
+    Output('download-report-pdf', 'data'),
+    Input('btn-download-pdf', 'n_clicks'),
+    State('report-data-store', 'data'),
+    State('report-include-charts', 'value'),
+    prevent_initial_call=True
+)
+def download_pdf(n_clicks, report_data, include_charts):
+    if n_clicks is None or n_clicks == 0:
+        return dash.no_update
+
+    if report_data is None:
+        return dash.no_update
+
+    if not REPORTLAB_AVAILABLE:
+        return dash.no_update
+
+    try:
+        charts = {}
+        if include_charts and 'charts' in include_charts and KALEIDO_AVAILABLE:
+            try:
+                charts = generate_report_charts(report_data)
+            except Exception:
+                charts = {}
+
+        pdf_bytes = generate_pdf_report(report_data, charts)
+        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        template_name = report_data.get('template_info', {}).get('name', '销售分析报告')
+        filename = f'{template_name}_{timestamp}.pdf'
+
+        return dcc.send_bytes(pdf_bytes, filename)
+    except Exception as e:
+        import traceback
+        print(f'PDF 导出失败: {str(e)}')
+        print(traceback.format_exc())
+        return dash.no_update
+
+
+@callback(
+    Output('download-report-word', 'data'),
+    Input('btn-download-word', 'n_clicks'),
+    State('report-data-store', 'data'),
+    State('report-include-charts', 'value'),
+    prevent_initial_call=True
+)
+def download_word(n_clicks, report_data, include_charts):
+    if n_clicks is None or n_clicks == 0:
+        return dash.no_update
+
+    if report_data is None:
+        return dash.no_update
+
+    if not DOCX_AVAILABLE:
+        return dash.no_update
+
+    try:
+        charts = {}
+        if include_charts and 'charts' in include_charts and KALEIDO_AVAILABLE:
+            try:
+                charts = generate_report_charts(report_data)
+            except Exception:
+                charts = {}
+
+        word_bytes = generate_word_report(report_data, charts)
+        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        template_name = report_data.get('template_info', {}).get('name', '销售分析报告')
+        filename = f'{template_name}_{timestamp}.docx'
+
+        return dcc.send_bytes(word_bytes, filename)
+    except Exception as e:
+        import traceback
+        print(f'Word 导出失败: {str(e)}')
+        print(traceback.format_exc())
         return dash.no_update
 
 
