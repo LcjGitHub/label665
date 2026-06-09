@@ -17,6 +17,9 @@ from trend_charts import (
 from promo_evaluation import (
     evaluate_promo_activity, get_activity_list
 )
+from customer_analysis import (
+    run_customer_analysis, export_clustering_csv
+)
 
 app = dash.Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -27,6 +30,7 @@ app.layout = html.Div([
     dcc.Store(id='stored-data-local', data=None, storage_type='local'),
     dcc.Store(id='stored-quality-report', data=None),
     dcc.Store(id='eval-result-store', data=None),
+    dcc.Store(id='customer-analysis-store', data=None),
     html.Div(id='navbar-container'),
     html.Div(id='page-content')
 ], style={
@@ -41,6 +45,7 @@ def navbar(current_path, data_valid):
     analysis_active = current_path == '/analysis'
     trend_active = current_path == '/trend'
     evaluation_active = current_path == '/evaluation'
+    customer_active = current_path == '/customer'
 
     if data_valid:
         analysis_link = dcc.Link('促销分析', href='/analysis', style={
@@ -66,6 +71,15 @@ def navbar(current_path, data_valid):
             'textDecoration': 'none',
             'padding': '15px 25px',
             'backgroundColor': '#2E86AB' if evaluation_active else 'transparent',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'marginRight': '10px'
+        })
+        customer_link = dcc.Link('客户分析', href='/customer', style={
+            'color': 'white',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#2E86AB' if customer_active else 'transparent',
             'borderRadius': '5px',
             'fontWeight': 'bold'
         })
@@ -97,6 +111,16 @@ def navbar(current_path, data_valid):
             'backgroundColor': '#333',
             'borderRadius': '5px',
             'fontWeight': 'bold',
+            'cursor': 'not-allowed',
+            'marginRight': '10px'
+        })
+        customer_link = html.Span('客户分析', title='请先上传并验证数据', style={
+            'color': '#888',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#333',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
             'cursor': 'not-allowed'
         })
 
@@ -119,7 +143,8 @@ def navbar(current_path, data_valid):
             }),
             analysis_link,
             trend_link,
-            evaluation_link
+            evaluation_link,
+            customer_link
         ], style={
             'display': 'flex',
             'alignItems': 'center',
@@ -312,6 +337,39 @@ def evaluation_page():
         }),
 
         html.Div(id='eval-results-container')
+    ])
+
+
+CLUSTER_COLORS = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#3B1F2B', '#27ae60', '#8e44ad', '#16a085']
+
+
+def customer_page():
+    return html.Div([
+        html.H1(
+            '客户分群与行为分析',
+            style={
+                'textAlign': 'center',
+                'color': '#2E86AB',
+                'marginBottom': '30px',
+                'marginTop': '30px'
+            }
+        ),
+
+        html.Div(id='customer-config-container', style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px',
+            'margin': '20px'
+        }),
+
+        html.Div(id='customer-summary-container'),
+
+        html.Div(id='customer-visualization-container'),
+
+        html.Div(id='customer-profiles-container'),
+
+        html.Div(id='customer-detail-container')
     ])
 
 
@@ -623,7 +681,7 @@ def render_navbar(pathname, stored_data):
     State('stored-data', 'data')
 )
 def display_page(pathname, stored_data):
-    if pathname in ['/analysis', '/trend', '/evaluation']:
+    if pathname in ['/analysis', '/trend', '/evaluation', '/customer']:
         if stored_data is None:
             return html.Div([
                 html.Div([
@@ -658,8 +716,10 @@ def display_page(pathname, stored_data):
             return analysis_page()
         elif pathname == '/trend':
             return trend_page()
-        else:
+        elif pathname == '/evaluation':
             return evaluation_page()
+        else:
+            return customer_page()
     else:
         return upload_page()
 
@@ -1643,6 +1703,828 @@ def generate_eval_results(n_clicks, df_json, activity_type, w_roi, w_lift, w_cac
                 'textAlign': 'center'
             })
         ], None)
+
+
+def build_customer_config_content(df_json):
+    if df_json is None:
+        return html.Div()
+
+    children = []
+
+    children.append(html.Div([
+        html.H3('客户分析参数配置', style={'color': '#333', 'marginBottom': '20px'}),
+
+        html.Div([
+            html.Div([
+                html.Label('聚类数量 (K)', style={
+                    'fontWeight': 'bold', 'color': '#333',
+                    'marginBottom': '8px', 'display': 'block', 'fontSize': '14px'
+                }),
+                dcc.Slider(
+                    id='cluster-count-slider',
+                    min=2,
+                    max=8,
+                    value=4,
+                    marks={i: f'{i}个' for i in range(2, 9)},
+                    step=1
+                ),
+                html.Div('建议 3-5 个聚类，系统会根据轮廓系数自动推荐最优值', style={
+                    'color': '#999', 'fontSize': '12px', 'marginTop': '5px'
+                })
+            ], style={'marginBottom': '25px'}),
+
+            html.Div([
+                html.Label('散点图 X轴维度', style={
+                    'fontWeight': 'bold', 'color': '#333',
+                    'marginBottom': '8px', 'display': 'block', 'fontSize': '14px'
+                }),
+                dcc.Dropdown(
+                    id='scatter-x-axis',
+                    options=[
+                        {'label': 'Recency (最近购买天数)', 'value': 'Recency'},
+                        {'label': 'Frequency (购买频次)', 'value': 'Frequency'},
+                        {'label': 'Monetary (消费总额)', 'value': 'Monetary'},
+                        {'label': 'AvgOrderValue (平均客单价)', 'value': 'AvgOrderValue'}
+                    ],
+                    value='Frequency',
+                    style={'width': '100%'}
+                )
+            ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
+
+            html.Div([
+                html.Label('散点图 Y轴维度', style={
+                    'fontWeight': 'bold', 'color': '#333',
+                    'marginBottom': '8px', 'display': 'block', 'fontSize': '14px'
+                }),
+                dcc.Dropdown(
+                    id='scatter-y-axis',
+                    options=[
+                        {'label': 'Recency (最近购买天数)', 'value': 'Recency'},
+                        {'label': 'Frequency (购买频次)', 'value': 'Frequency'},
+                        {'label': 'Monetary (消费总额)', 'value': 'Monetary'},
+                        {'label': 'AvgOrderValue (平均客单价)', 'value': 'AvgOrderValue'}
+                    ],
+                    value='Monetary',
+                    style={'width': '100%'}
+                )
+            ], style={'flex': '1', 'minWidth': '200px', 'marginBottom': '15px'})
+        ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px'}),
+
+        html.Div([
+            html.Button(
+                '开始客户分群分析',
+                id='btn-run-customer-analysis',
+                n_clicks=0,
+                style={
+                    'backgroundColor': '#2E86AB', 'color': 'white',
+                    'padding': '12px 40px', 'border': 'none',
+                    'borderRadius': '6px', 'fontWeight': 'bold',
+                    'fontSize': '15px', 'cursor': 'pointer',
+                    'boxShadow': '0 2px 6px rgba(46, 134, 171, 0.4)'
+                }
+            ),
+            dcc.Download(id='download-customer-csv')
+        ], style={'textAlign': 'center', 'marginTop': '20px'})
+    ]))
+
+    return html.Div(children)
+
+
+def build_customer_summary(analysis_result):
+    if analysis_result is None or not analysis_result.get('success'):
+        return html.Div()
+
+    profiles = analysis_result.get('cluster_profiles', [])
+    total_cust = analysis_result.get('total_customers', 0)
+    total_tx = analysis_result.get('total_transactions', 0)
+    cluster_info = analysis_result.get('cluster_info', {})
+
+    avg_order_value = analysis_result.get('rfm_data', pd.DataFrame())
+    if not avg_order_value.empty:
+        avg_monetary = round(avg_order_value['Monetary'].mean(), 2)
+        avg_frequency = round(avg_order_value['Frequency'].mean(), 1)
+        avg_recency = round(avg_order_value['Recency'].mean(), 1)
+    else:
+        avg_monetary = 0
+        avg_frequency = 0
+        avg_recency = 0
+
+    silhouette = cluster_info.get('silhouette_score', 'N/A')
+
+    return html.Div([
+        html.Div([
+            html.H3('客户分析概览', style={'color': '#333', 'marginBottom': '15px'}),
+            html.Div([
+                html.Div([
+                    html.H4('总客户数', style={'color': '#666', 'fontSize': '14px'}),
+                    html.P(f'{total_cust}', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#2E86AB'})
+                ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#eaf4fb', 'borderRadius': '10px', 'flex': '1'}),
+
+                html.Div([
+                    html.H4('总交易数', style={'color': '#666', 'fontSize': '14px'}),
+                    html.P(f'{total_tx}', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#A23B72'})
+                ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#fbe9f4', 'borderRadius': '10px', 'flex': '1'}),
+
+                html.Div([
+                    html.H4('平均消费金额', style={'color': '#666', 'fontSize': '14px'}),
+                    html.P(f'¥{avg_monetary:,.0f}', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#F18F01'})
+                ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#fff4e6', 'borderRadius': '10px', 'flex': '1'}),
+
+                html.Div([
+                    html.H4('平均购买频次', style={'color': '#666', 'fontSize': '14px'}),
+                    html.P(f'{avg_frequency}次', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#27ae60'})
+                ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#e8f8f0', 'borderRadius': '10px', 'flex': '1'}),
+
+                html.Div([
+                    html.H4('聚类数', style={'color': '#666', 'fontSize': '14px'}),
+                    html.P(f'{cluster_info.get("n_clusters", 0)}组', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#8e44ad'})
+                ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#f3eafb', 'borderRadius': '10px', 'flex': '1'}),
+
+                html.Div([
+                    html.H4('轮廓系数', style={'color': '#666', 'fontSize': '14px'}),
+                    html.P(f'{silhouette}', style={'fontSize': '28px', 'fontWeight': 'bold', 'color': '#16a085'})
+                ], style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#e6f8f6', 'borderRadius': '10px', 'flex': '1'})
+            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(150px, 1fr))', 'gap': '15px'})
+        ], style={
+            'backgroundColor': 'white', 'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px', 'margin': '20px'
+        })
+    ])
+
+
+def create_scatter_plot(analysis_result, x_col, y_col):
+    if analysis_result is None or not analysis_result.get('success'):
+        return {
+            'data': [],
+            'layout': {
+                'title': {'text': '暂无数据', 'x': 0.5},
+                'xaxis': {'visible': False},
+                'yaxis': {'visible': False}}}
+
+    clustered = analysis_result.get('clustered_data')
+    if clustered is None or clustered.empty:
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    fig = go.Figure()
+
+    clusters = sorted(clustered['Cluster'].unique())
+    for i, cid in enumerate(clusters):
+        cluster_data = clustered[clustered['Cluster'] == cid]
+        name = cluster_data['聚类名称'].iloc[0] if '聚类名称' in cluster_data.columns else f'Cluster {cid}'
+        color = CLUSTER_COLORS[i % len(CLUSTER_COLORS)]
+
+        fig.add_trace(go.Scatter(
+            x=cluster_data[x_col],
+            y=cluster_data[y_col],
+            mode='markers',
+            name=name,
+            marker=dict(
+                size=8,
+                color=color,
+                opacity=0.7,
+                line=dict(width=1, color='white')
+            ),
+            text=[f"客户ID: {row['客户ID']}<br>{x_col}: {row[x_col]}<br>{y_col}: {row[y_col]}"
+                  for _, row in cluster_data.iterrows()],
+            hovertemplate='%{text}<extra></extra>'
+        ))
+
+    fig.update_layout(
+        title=f'客户分群散点图 ({x_col} vs {y_col})',
+        xaxis_title=x_col,
+        yaxis_title=y_col,
+        plot_bgcolor='white',
+        legend_title='客户群体',
+        hovermode='closest',
+        title_x=0.5,
+        font=dict(size=12)
+    )
+
+    return fig
+
+
+def create_heatmap(analysis_result):
+    if analysis_result is None or not analysis_result.get('success'):
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    profiles = analysis_result.get('cluster_profiles', [])
+    if not profiles:
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    metrics = ['平均Recency(天)', '平均购买频次', '平均消费总额', '平均客单价']
+    if profiles and profiles[0].get('复购率(%)'):
+        metrics.append('复购率(%)')
+
+    z = []
+    x_labels = metrics
+    y_labels = []
+
+    for p in profiles:
+        y_labels.append(p['聚类名称'])
+        row = []
+        for m in metrics:
+            row.append(p.get(m, 0))
+        z.append(row)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z,
+        x=x_labels,
+        y=y_labels,
+        colorscale='Blues',
+        showscale=True,
+        text=[[f'{v:.2f}' for v in row] for row in z],
+        texttemplate='%{text}',
+        textfont=dict(size=12)
+    ))
+
+    fig.update_layout(
+        title='各客户群体特征热力图',
+        xaxis_title='指标',
+        yaxis_title='客户群体',
+        plot_bgcolor='white',
+        title_x=0.5,
+        font=dict(size=12)
+    )
+
+    return fig
+
+
+def create_radar_chart(analysis_result):
+    if analysis_result is None or not analysis_result.get('success'):
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    profiles = analysis_result.get('cluster_profiles', [])
+    if not profiles:
+        return {
+            'data': [],
+            'layout': {'title': {'text': '暂无数据', 'x': 0.5}}}
+
+    fig = go.Figure()
+
+    metrics = ['R均值', 'F均值', 'M均值']
+    metric_labels = ['Recency (R)', 'Frequency (F)', 'Monetary (M)']
+
+    for i, p in enumerate(profiles):
+        values = [p.get(m, 0) for m in metrics]
+        values.append(values[0])
+        labels = metric_labels.copy()
+        labels.append(labels[0])
+        color = CLUSTER_COLORS[i % len(CLUSTER_COLORS)]
+
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=labels,
+            fill='toself',
+            name=p['聚类名称'],
+            line=dict(color=color, width=2),
+            fillcolor=f'rgba{tuple(int(color.lstrip("#")[j:j+2], 16) for j in (0, 2, 4)) + (0.2,)}',
+            marker=dict(size=6)
+        ))
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 5], title='得分'),
+            angularaxis=dict(tickfont=dict(size=12))
+        ),
+        title='各群体 RFM 雷达图对比',
+        showlegend=True,
+        legend_title='客户群体',
+        title_x=0.5,
+        plot_bgcolor='white',
+        font=dict(size=12)
+    )
+
+    return fig
+
+
+def build_visualization_content(analysis_result, x_col, y_col):
+    if analysis_result is None or not analysis_result.get('success'):
+        return html.Div()
+
+    return html.Div([
+        html.Div([
+            html.Div([
+                html.H3('客户分群散点图', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='customer-scatter-plot', figure=create_scatter_plot(analysis_result, x_col, y_col))
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px 10px'
+            }),
+
+            html.Div([
+                html.H3('群体特征热力图', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='customer-heatmap', figure=create_heatmap(analysis_result))
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px 10px'
+            })
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'}),
+
+        html.Div([
+            html.Div([
+                html.H3('RFM 雷达图对比', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='customer-radar-chart', figure=create_radar_chart(analysis_result))
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px 10px'
+            })
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr', 'gap': '0'})
+    ])
+
+
+def _get_cluster_color(cluster_idx):
+    return CLUSTER_COLORS[int(cluster_idx) % len(CLUSTER_COLORS)]
+
+
+def build_profile_cards(analysis_result):
+    if analysis_result is None or not analysis_result.get('success'):
+        return html.Div()
+
+    profiles = analysis_result.get('cluster_profiles', [])
+    if not profiles:
+        return html.Div()
+
+    cards = []
+    for i, p in enumerate(profiles):
+        color = _get_cluster_color(p['Cluster'])
+        border_color = {'borderTop': f'5px solid {color}'}
+
+        typical_cust = p.get('典型客户', [])
+        typical_str = '、'.join(typical_cust) if typical_cust else '暂无'
+
+        prefs = p.get('偏好品类', [])
+        pref_str = '、'.join(prefs) if prefs else '暂无'
+
+        regions = p.get('主要地区', [])
+        region_str = '、'.join(regions) if regions else '暂无'
+
+        repurchase = p.get('复购率(%)', 'N/A')
+        repurchase_str = f'{repurchase}%' if isinstance(repurchase, (int, float)) else str(repurchase)
+
+        cards.append(html.Div([
+            html.Div([
+                html.H4(p['聚类名称'], style={
+                    'color': 'white', 'margin': 0, 'fontSize': '16px',
+                    'textAlign': 'center'
+                })
+            ], style={
+                'backgroundColor': color, 'padding': '15px',
+                'borderTopLeftRadius': '8px', 'borderTopRightRadius': '8px'
+            }),
+            html.Div([
+                html.Div([
+                    html.Div(f'{p["客户数量"]}人', style={
+                        'fontSize': '24px', 'fontWeight': 'bold', 'color': color
+                    }),
+                    html.Div(f'占比 {p["客户占比(%)"]}%', style={
+                        'fontSize': '12px', 'color': '#666'
+                    })
+                ], style={'textAlign': 'center', 'padding': '10px'}),
+
+                html.Hr(style={'margin': '10px 0', 'border': 'none', 'borderTop': '1px solid #eee'}),
+
+                html.Div([
+                    html.Div([
+                        html.Span('平均购买频次', style={'color': '#666', 'fontSize': '12px', 'display': 'block'}),
+                        html.Strong(f'{p["平均购买频次"]}次', style={'color': '#333', 'fontSize': '14px'})
+                    ], style={'flex': '1', 'textAlign': 'center', 'padding': '5px'}),
+                    html.Div([
+                        html.Span('平均客单价', style={'color': '#666', 'fontSize': '12px', 'display': 'block'}),
+                        html.Strong(f'¥{p["平均客单价"]:,.0f}', style={'color': '#333', 'fontSize': '14px'})
+                    ], style={'flex': '1', 'textAlign': 'center', 'padding': '5px'})
+                ], style={'display': 'flex', 'marginBottom': '8px'}),
+
+                html.Div([
+                    html.Div([
+                        html.Span('消费总额', style={'color': '#666', 'fontSize': '12px', 'display': 'block'}),
+                        html.Strong(f'¥{p["平均消费总额"]:,.0f}', style={'color': '#333', 'fontSize': '14px'})
+                    ], style={'flex': '1', 'textAlign': 'center', 'padding': '5px'}),
+                    html.Div([
+                        html.Span('复购率', style={'color': '#666', 'fontSize': '12px', 'display': 'block'}),
+                        html.Strong(repurchase_str, style={'color': '#333', 'fontSize': '14px'})
+                    ], style={'flex': '1', 'textAlign': 'center', 'padding': '5px'})
+                ], style={'display': 'flex', 'marginBottom': '10px'}),
+
+                html.Div([
+                    html.Div('偏好品类:', style={'color': '#666', 'fontSize': '12px', 'fontWeight': 'bold'}),
+                    html.Div(pref_str, style={'color': '#333', 'fontSize': '12px', 'marginTop': '3px'})
+                ], style={'padding': '5px 0'}),
+
+                html.Div([
+                    html.Div('主要地区:', style={'color': '#666', 'fontSize': '12px', 'fontWeight': 'bold'}),
+                    html.Div(region_str, style={'color': '#333', 'fontSize': '12px', 'marginTop': '3px'})
+                ], style={'padding': '5px 0'}),
+
+                html.Div([
+                    html.Div('典型客户:', style={'color': '#666', 'fontSize': '12px', 'fontWeight': 'bold'}),
+                    html.Div(typical_str, style={'color': '#333', 'fontSize': '12px', 'marginTop': '3px'})
+                ], style={'padding': '5px 0'}),
+
+                html.Button(
+                    '查看详细特征',
+                    id={'type': 'cluster-detail-btn', 'index': str(p['Cluster'])},
+                    n_clicks=0,
+                    style={
+                        'width': '100%',
+                        'marginTop': '12px',
+                        'padding': '8px 15px',
+                        'backgroundColor': color,
+                        'color': 'white',
+                        'border': 'none',
+                        'borderRadius': '5px',
+                        'fontSize': '13px',
+                        'fontWeight': 'bold',
+                        'cursor': 'pointer'
+                    }
+                )
+            ], style={'padding': '15px'})
+        ], style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'overflow': 'hidden',
+            **border_color
+        }))
+
+    return html.Div([
+        html.H3('客户画像卡片', style={'color': '#333', 'marginBottom': '20px', 'marginLeft': '20px', 'marginTop': '20px'}),
+        html.Div(cards, style={
+            'display': 'grid',
+            'gridTemplateColumns': 'repeat(auto-fit, minmax(280px, 1fr))',
+            'gap': '20px',
+            'padding': '0 20px 20px 20px'
+        })
+    ])
+
+
+def build_cluster_detail(analysis_result, cluster_id):
+    if analysis_result is None or not analysis_result.get('success'):
+        return html.Div()
+
+    if cluster_id is None:
+        return html.Div([
+            html.Div([
+                html.H3('💡 点击上方"查看详细特征"按钮查看特定客户群体的详细行为统计', style={
+                    'color': '#666', 'textAlign': 'center',
+                    'padding': '30px', 'fontSize': '15px'
+                })
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px'
+            })
+        ])
+
+    profiles = analysis_result.get('cluster_profiles', [])
+    target = next((p for p in profiles if str(p['Cluster']) == str(cluster_id)), None)
+    if not target:
+        return html.Div()
+
+    color = _get_cluster_color(target['Cluster'])
+
+    detail_rows = [
+        {'指标': '客户群体名称', '数值': target['聚类名称']},
+        {'指标': '客户数量', '数值': f"{target['客户数量']} 人"},
+        {'指标': '客户占比', '数值': f"{target['客户占比(%)']}%"},
+        {'指标': '平均 Recency (最近购买天数)', '数值': f"{target['平均Recency(天)']} 天"},
+        {'指标': '平均购买频次', '数值': f"{target['平均购买频次']} 次"},
+        {'指标': '平均消费总额', '数值': f"¥{target['平均消费总额']:,.2f}"},
+        {'指标': '平均客单价', '数值': f"¥{target['平均客单价']:,.2f}"}
+    ]
+
+    if target.get('复购率(%)') is not None:
+        detail_rows.append({'指标': '复购率', '数值': f"{target['复购率(%)']}%"})
+    if target.get('总订单数'):
+        detail_rows.append({'指标': '总订单数', '数值': f"{target['总订单数']} 笔"})
+    if target.get('总销售额'):
+        detail_rows.append({'指标': '群体总销售额', '数值': f"¥{target['总销售额']:,.2f}"})
+    if target.get('R均值'):
+        detail_rows.append({'指标': 'R 得分均值', '数值': f"{target['R均值']:.2f} / 5.0"})
+    if target.get('F均值'):
+        detail_rows.append({'指标': 'F 得分均值', '数值': f"{target['F均值']:.2f} / 5.0"})
+    if target.get('M均值'):
+        detail_rows.append({'指标': 'M 得分均值', '数值': f"{target['M均值']:.2f} / 5.0"})
+
+    children = []
+
+    children.append(html.Div([
+        html.Div([
+            html.H3(f"📊 {target['聚类名称']} - 详细行为特征", style={
+                'color': 'white', 'margin': 0
+            })
+        ], style={
+            'backgroundColor': color,
+            'padding': '15px 20px',
+            'borderTopLeftRadius': '10px',
+            'borderTopRightRadius': '10px'
+        }),
+        html.Div([
+            dash_table.DataTable(
+                data=detail_rows,
+                columns=[
+                    {'name': '分析指标', 'id': '指标'},
+                    {'name': '统计结果', 'id': '数值'}
+                ],
+                style_cell={'padding': '12px 15px', 'textAlign': 'left', 'fontSize': '14px'},
+                style_header={
+                    'backgroundColor': '#f0f0f0',
+                    'fontWeight': 'bold',
+                    'fontSize': '14px',
+                    'textAlign': 'center'
+                },
+                style_table={'overflowX': 'auto'}
+            )
+        ], style={'padding': '20px'})
+    ], style={
+        'backgroundColor': 'white', 'borderRadius': '10px',
+        'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+        'margin': '20px',
+        'overflow': 'hidden'
+    }))
+
+    extra_info = []
+    if target.get('偏好品类'):
+        extra_info.append(html.Div([
+            html.Strong('🛒 偏好品类: ', style={'color': color, 'fontSize': '14px'}),
+            html.Span('、'.join(target['偏好品类']), style={'color': '#333', 'fontSize': '14px'})
+        ], style={'padding': '8px 0'}))
+    if target.get('主要地区'):
+        extra_info.append(html.Div([
+            html.Strong('📍 主要地区: ', style={'color': color, 'fontSize': '14px'}),
+            html.Span('、'.join(target['主要地区']), style={'color': '#333', 'fontSize': '14px'})
+        ], style={'padding': '8px 0'}))
+    if target.get('典型客户'):
+        extra_info.append(html.Div([
+            html.Strong('👤 典型客户ID: ', style={'color': color, 'fontSize': '14px'}),
+            html.Span('、'.join(target['典型客户']), style={'color': '#333', 'fontSize': '14px'})
+        ], style={'padding': '8px 0'}))
+
+    if extra_info:
+        children.append(html.Div([
+            html.H4('补充信息', style={'color': '#333', 'marginBottom': '10px', 'fontSize': '15px'}),
+            html.Div(extra_info)
+        ], style={
+            'backgroundColor': '#fafafa',
+            'borderRadius': '8px',
+            'padding': '15px 20px',
+            'margin': '0 20px 20px 20px'
+        }))
+
+    rfm_scores = []
+    if target.get('R均值'):
+        rfm_scores.append({'维度': 'Recency (最近购买)', '得分': round(target['R均值'] * 20, 1), '满分': 100})
+    if target.get('F均值'):
+        rfm_scores.append({'维度': 'Frequency (购买频次)', '得分': round(target['F均值'] * 20, 1), '满分': 100})
+    if target.get('M均值'):
+        rfm_scores.append({'维度': 'Monetary (消费能力)', '得分': round(target['M均值'] * 20, 1), '满分': 100})
+
+    if rfm_scores:
+        rfm_bars = []
+        for s in rfm_scores:
+            rfm_bars.append(html.Div([
+                html.Div([
+                    html.Span(s['维度'], style={'display': 'inline-block', 'width': '180px', 'color': '#666', 'fontSize': '13px'}),
+                    html.Div([
+                        html.Div(style={
+                            'width': f"{s['得分']}%",
+                            'height': '22px',
+                            'backgroundColor': color,
+                            'borderRadius': '4px',
+                            'display': 'inline-block'
+                        })
+                    ], style={
+                        'display': 'inline-block',
+                        'width': '200px',
+                        'backgroundColor': '#f0f0f0',
+                        'borderRadius': '4px',
+                        'height': '22px',
+                        'overflow': 'hidden',
+                        'verticalAlign': 'middle'
+                    }),
+                    html.Span(f" {s['得分']:.1f}/100", style={'fontWeight': 'bold', 'color': '#333', 'marginLeft': '10px', 'fontSize': '13px'})
+                ], style={'marginBottom': '12px'})
+            ]))
+
+        children.append(html.Div([
+            html.H4('RFM 维度得分', style={'color': '#333', 'marginBottom': '15px', 'fontSize': '15px'}),
+            html.Div(rfm_bars)
+        ], style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '20px 25px',
+            'margin': '20px'
+        }))
+
+    children.append(html.Div([
+        html.Button(
+            '📥 导出所有客户分群结果为 CSV',
+            id='btn-export-customer-csv',
+            n_clicks=0,
+            style={
+                'padding': '12px 30px',
+                'backgroundColor': '#27ae60',
+                'color': 'white',
+                'border': 'none',
+                'borderRadius': '6px',
+                'fontSize': '14px',
+                'fontWeight': 'bold',
+                'cursor': 'pointer',
+                'boxShadow': '0 2px 6px rgba(39, 174, 96, 0.4)'
+            }
+        )
+    ], style={'textAlign': 'center', 'padding': '10px 20px 30px 20px'}))
+
+    return html.Div(children)
+
+
+@callback(
+    Output('customer-config-container', 'children'),
+    Input('stored-data', 'data')
+)
+def render_customer_config(df_json):
+    if df_json is None:
+        return html.Div()
+    return build_customer_config_content(df_json)
+
+
+@callback(
+    Output('customer-analysis-store', 'data'),
+    Output('customer-summary-container', 'children'),
+    Output('customer-visualization-container', 'children'),
+    Output('customer-profiles-container', 'children'),
+    Output('customer-detail-container', 'children'),
+    Input('btn-run-customer-analysis', 'n_clicks'),
+    State('stored-data', 'data'),
+    State('cluster-count-slider', 'value'),
+    State('scatter-x-axis', 'value'),
+    State('scatter-y-axis', 'value'),
+    prevent_initial_call=True
+)
+def run_analysis(n_clicks, df_json, n_clusters, x_col, y_col):
+    if n_clicks is None or n_clicks == 0:
+        return None, html.Div(), html.Div(), html.Div(), build_cluster_detail(None, None)
+
+    if df_json is None:
+        error_div = html.Div([
+            html.Div('⚠️ 请先上传有效数据', style={
+                'color': '#e74c3c', 'padding': '20px',
+                'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                'textAlign': 'center'
+            })
+        ])
+        return None, error_div, html.Div(), html.Div(), html.Div()
+
+    df = pd.read_json(df_json, orient='split')
+
+    try:
+        result = run_customer_analysis(df, n_clusters=n_clusters)
+        if not result.get('success'):
+            error_msg = result.get('error', '分析失败')
+            error_div = html.Div([
+                html.Div(f'❌ {error_msg}', style={
+                    'color': '#e74c3c', 'padding': '20px',
+                    'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                    'textAlign': 'center'
+                })
+            ])
+            return None, error_div, html.Div(), html.Div(), html.Div()
+
+        serializable = {
+            'success': True,
+            'cluster_profiles': result.get('cluster_profiles', []),
+            'cluster_info': result.get('cluster_info', {}),
+            'segment_distribution': result.get('segment_distribution', []),
+            'total_customers': result.get('total_customers', 0),
+            'total_transactions': result.get('total_transactions', 0),
+            'clustered_data_json': result.get('clustered_data').to_json(orient='split') if result.get('clustered_data') is not None else None,
+            'rfm_data_json': result.get('rfm_data').to_json(orient='split') if result.get('rfm_data') is not None else None
+        }
+
+        summary = build_customer_summary(result)
+        viz = build_visualization_content(result, x_col, y_col)
+        profiles = build_profile_cards(result)
+        detail = build_cluster_detail(result, None)
+
+        return serializable, summary, viz, profiles, detail
+    except Exception as e:
+        error_div = html.Div([
+            html.Div(f'❌ 分析失败: {str(e)}', style={
+                'color': '#e74c3c', 'padding': '20px',
+                'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                'textAlign': 'center'
+            })
+        ])
+        return None, error_div, html.Div(), html.Div(), html.Div()
+
+
+@callback(
+    Output('customer-scatter-plot', 'figure', allow_duplicate=True),
+    Input('scatter-x-axis', 'value'),
+    Input('scatter-y-axis', 'value'),
+    State('customer-analysis-store', 'data'),
+    prevent_initial_call=True
+)
+def update_scatter(x_col, y_col, stored):
+    if not stored or not stored.get('success'):
+        return dash.no_update
+
+    clustered_json = stored.get('clustered_data_json')
+    if not clustered_json:
+        return dash.no_update
+
+    try:
+        clustered = pd.read_json(clustered_json, orient='split')
+        temp_result = {
+            'success': True,
+            'clustered_data': clustered
+        }
+        return create_scatter_plot(temp_result, x_col, y_col)
+    except Exception:
+        return dash.no_update
+
+
+@callback(
+    Output('customer-detail-container', 'children', allow_duplicate=True),
+    Input({'type': 'cluster-detail-btn', 'index': dash.ALL}, 'n_clicks'),
+    State('customer-analysis-store', 'data'),
+    prevent_initial_call=True
+)
+def show_cluster_detail(n_clicks_list, stored):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+
+    trigger = ctx.triggered[0]
+    if trigger['value'] is None or trigger['value'] == 0:
+        return dash.no_update
+
+    prop_id = trigger['prop_id']
+    try:
+        import json as _json
+        idx_dict = _json.loads(prop_id.split('.')[0])
+        cluster_id = idx_dict.get('index')
+    except Exception:
+        return dash.no_update
+
+    if not stored or not stored.get('success'):
+        return dash.no_update
+
+    clustered_json = stored.get('clustered_data_json')
+    rfm_json = stored.get('rfm_data_json')
+    if not clustered_json:
+        return dash.no_update
+
+    try:
+        clustered = pd.read_json(clustered_json, orient='split')
+        rfm = pd.read_json(rfm_json, orient='split') if rfm_json else pd.DataFrame()
+        profiles = stored.get('cluster_profiles', [])
+        temp_result = {
+            'success': True,
+            'clustered_data': clustered,
+            'rfm_data': rfm,
+            'cluster_profiles': profiles
+        }
+        return build_cluster_detail(temp_result, cluster_id)
+    except Exception:
+        return dash.no_update
+
+
+@callback(
+    Output('download-customer-csv', 'data'),
+    Input('btn-export-customer-csv', 'n_clicks'),
+    State('customer-analysis-store', 'data'),
+    prevent_initial_call=True
+)
+def export_csv(n_clicks, stored):
+    if n_clicks is None or n_clicks == 0:
+        return dash.no_update
+
+    if not stored or not stored.get('success'):
+        return dash.no_update
+
+    clustered_json = stored.get('clustered_data_json')
+    if not clustered_json:
+        return dash.no_update
+
+    try:
+        clustered = pd.read_json(clustered_json, orient='split')
+        csv_str = clustered.to_csv(index=False, encoding='utf-8-sig')
+        return dict(content=csv_str, filename='客户分群结果.csv', type='text/csv')
+    except Exception:
+        return dash.no_update
 
 
 if __name__ == '__main__':
