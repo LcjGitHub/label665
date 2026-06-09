@@ -7,6 +7,25 @@ from typing import Dict, List, Tuple, Any, Optional
 
 REQUIRED_COLUMNS = ['期间', '销售额', '类型']
 
+DTYPE_CN_MAP = {
+    'int64': '整数型 (64位)',
+    'int32': '整数型 (32位)',
+    'int': '整数型',
+    'float64': '浮点型 (64位)',
+    'float32': '浮点型 (32位)',
+    'float': '浮点型',
+    'object': '文本型',
+    'string': '字符串型',
+    'bool': '布尔型',
+    'datetime64': '日期时间型',
+    'datetime64[ns]': '日期时间型',
+    'category': '分类型'
+}
+
+
+def dtype_to_cn(dtype_str: str) -> str:
+    return DTYPE_CN_MAP.get(dtype_str, dtype_str)
+
 
 def parse_uploaded_file(contents: str, filename: str) -> Tuple[Optional[pd.DataFrame], List[str]]:
     errors: List[str] = []
@@ -116,7 +135,7 @@ def generate_quality_report(df: pd.DataFrame) -> Dict[str, Any]:
 
     dtype_info = {}
     for col in df.columns:
-        dtype_info[col] = str(df[col].dtype)
+        dtype_info[col] = dtype_to_cn(str(df[col].dtype))
     report['dtype_info'] = dtype_info
 
     outlier_info: Dict[str, Any] = {}
@@ -135,6 +154,11 @@ def generate_quality_report(df: pd.DataFrame) -> Dict[str, Any]:
 
     report['is_valid'] = True
     validation_errors: List[str] = []
+
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            report['is_valid'] = False
+            validation_errors.append(f'缺少必要列: "{col}"')
 
     if len(df) < 3:
         report['is_valid'] = False

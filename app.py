@@ -12,6 +12,7 @@ app.layout = html.Div([
     dcc.Location(id='url', refresh=False),
     dcc.Store(id='stored-data', data=None),
     dcc.Store(id='stored-quality-report', data=None),
+    html.Div(id='navbar-container'),
     html.Div(id='page-content')
 ], style={
     'backgroundColor': '#f5f5f5',
@@ -20,9 +21,30 @@ app.layout = html.Div([
 })
 
 
-def navbar(current_path):
+def navbar(current_path, data_valid):
     upload_active = current_path == '/' or current_path == '/upload'
     analysis_active = current_path == '/analysis'
+
+    if data_valid:
+        analysis_link = dcc.Link('数据分析', href='/analysis', style={
+            'color': 'white',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#2E86AB' if analysis_active else 'transparent',
+            'borderRadius': '5px',
+            'fontWeight': 'bold'
+        })
+    else:
+        analysis_link = html.Span('数据分析', title='请先上传并验证数据', style={
+            'color': '#888',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#333',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'cursor': 'not-allowed'
+        })
+
     return html.Div([
         html.Div([
             html.H2('促销活动分析系统', style={
@@ -40,14 +62,7 @@ def navbar(current_path):
                 'fontWeight': 'bold',
                 'marginRight': '10px'
             }),
-            dcc.Link('数据分析', href='/analysis', style={
-                'color': 'white',
-                'textDecoration': 'none',
-                'padding': '15px 25px',
-                'backgroundColor': '#2E86AB' if analysis_active else 'transparent',
-                'borderRadius': '5px',
-                'fontWeight': 'bold'
-            })
+            analysis_link
         ], style={
             'display': 'flex',
             'alignItems': 'center',
@@ -61,7 +76,6 @@ def navbar(current_path):
 
 def upload_page():
     return html.Div([
-        navbar('/upload'),
         html.Div([
             html.H1('数据上传', style={
                 'textAlign': 'center',
@@ -149,7 +163,6 @@ def upload_page():
 
 def analysis_page():
     return html.Div([
-        navbar('/analysis'),
         html.Div(id='analysis-content')
     ])
 
@@ -423,11 +436,52 @@ def build_analysis_content(df_json):
 
 
 @callback(
-    Output('page-content', 'children'),
-    Input('url', 'pathname')
+    Output('navbar-container', 'children'),
+    Input('url', 'pathname'),
+    State('stored-data', 'data')
 )
-def display_page(pathname):
+def render_navbar(pathname, stored_data):
+    data_valid = stored_data is not None
+    return navbar(pathname, data_valid)
+
+
+@callback(
+    Output('page-content', 'children'),
+    Input('url', 'pathname'),
+    State('stored-data', 'data')
+)
+def display_page(pathname, stored_data):
     if pathname == '/analysis':
+        if stored_data is None:
+            return html.Div([
+                html.Div([
+                    html.H2('请先上传数据', style={'color': '#2E86AB', 'textAlign': 'center', 'marginTop': '60px'}),
+                    html.P('您尚未上传有效的数据文件，请先前往数据上传页面完成验证。', style={
+                        'textAlign': 'center',
+                        'color': '#666',
+                        'marginTop': '20px'
+                    }),
+                    html.Div([
+                        dcc.Link('前往数据上传', href='/upload', style={
+                            'display': 'inline-block',
+                            'padding': '12px 30px',
+                            'backgroundColor': '#2E86AB',
+                            'color': 'white',
+                            'textDecoration': 'none',
+                            'borderRadius': '5px',
+                            'fontWeight': 'bold',
+                            'textAlign': 'center'
+                        })
+                    ], style={'textAlign': 'center', 'marginTop': '30px'})
+                ], style={
+                    'backgroundColor': 'white',
+                    'borderRadius': '10px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'padding': '40px',
+                    'margin': '40px auto',
+                    'maxWidth': '600px'
+                })
+            ])
         return analysis_page()
     else:
         return upload_page()
@@ -486,12 +540,13 @@ def handle_upload(contents, filename, existing_data, existing_report):
     result = process_uploaded_data(contents, filename)
 
     errors = result['errors']
+    success = result['success']
     df = result['df']
     preview = result['preview']
     report = result['quality_report']
 
-    stored_data = df.to_json(orient='split') if df is not None else None
-    stored_report = json.dumps(report) if report is not None else None
+    stored_data = df.to_json(orient='split') if (df is not None and success) else existing_data
+    stored_report = json.dumps(report) if report is not None else existing_report
 
     filename_display = html.Div([
         html.Strong('已上传文件: ', style={'color': '#333'}),
