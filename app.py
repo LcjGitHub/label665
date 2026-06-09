@@ -3,7 +3,16 @@ from dash import html, dcc, dash_table, Input, Output, State, callback
 import plotly.express as px
 import pandas as pd
 import json
-from data_processor import process_uploaded_data, REQUIRED_COLUMNS
+from data_processor import (
+    process_uploaded_data, REQUIRED_COLUMNS,
+    aggregate_by_time_granularity, calculate_growth_rate,
+    detect_seasonality, detect_anomalies,
+    get_available_dimensions, filter_data
+)
+from trend_charts import (
+    create_line_chart, create_area_chart,
+    create_combined_chart, create_moving_average_chart
+)
 
 app = dash.Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -24,18 +33,38 @@ app.layout = html.Div([
 def navbar(current_path, data_valid):
     upload_active = current_path == '/' or current_path == '/upload'
     analysis_active = current_path == '/analysis'
+    trend_active = current_path == '/trend'
 
     if data_valid:
-        analysis_link = dcc.Link('数据分析', href='/analysis', style={
+        analysis_link = dcc.Link('促销分析', href='/analysis', style={
             'color': 'white',
             'textDecoration': 'none',
             'padding': '15px 25px',
             'backgroundColor': '#2E86AB' if analysis_active else 'transparent',
             'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'marginRight': '10px'
+        })
+        trend_link = dcc.Link('趋势分析', href='/trend', style={
+            'color': 'white',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#2E86AB' if trend_active else 'transparent',
+            'borderRadius': '5px',
             'fontWeight': 'bold'
         })
     else:
-        analysis_link = html.Span('数据分析', title='请先上传并验证数据', style={
+        analysis_link = html.Span('促销分析', title='请先上传并验证数据', style={
+            'color': '#888',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#333',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'cursor': 'not-allowed',
+            'marginRight': '10px'
+        })
+        trend_link = html.Span('趋势分析', title='请先上传并验证数据', style={
             'color': '#888',
             'textDecoration': 'none',
             'padding': '15px 25px',
@@ -62,7 +91,8 @@ def navbar(current_path, data_valid):
                 'fontWeight': 'bold',
                 'marginRight': '10px'
             }),
-            analysis_link
+            analysis_link,
+            trend_link
         ], style={
             'display': 'flex',
             'alignItems': 'center',
@@ -164,6 +194,84 @@ def upload_page():
 def analysis_page():
     return html.Div([
         html.Div(id='analysis-content')
+    ])
+
+
+def trend_page():
+    return html.Div([
+        html.H1(
+            '多维度销售趋势分析',
+            style={
+                'textAlign': 'center',
+                'color': '#2E86AB',
+                'marginBottom': '30px',
+                'marginTop': '30px'
+            }
+        ),
+
+        html.Div(id='trend-filters-container', style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px',
+            'margin': '20px'
+        }),
+
+        html.Div([
+            html.Div([
+                html.H3('销售趋势折线图', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='trend-line-chart')
+            ], style={
+                'backgroundColor': 'white',
+                'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px',
+                'margin': '20px 10px'
+            }),
+
+            html.Div([
+                html.H3('销售趋势面积图', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='trend-area-chart')
+            ], style={
+                'backgroundColor': 'white',
+                'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px',
+                'margin': '20px 10px'
+            })
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'}),
+
+        html.Div([
+            html.Div([
+                html.H3('销售趋势组合图（柱状+折线）', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='trend-combined-chart')
+            ], style={
+                'backgroundColor': 'white',
+                'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px',
+                'margin': '20px 10px'
+            }),
+
+            html.Div([
+                html.H3('销售额及移动平均趋势', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(id='trend-ma-chart')
+            ], style={
+                'backgroundColor': 'white',
+                'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px',
+                'margin': '20px 10px'
+            })
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0', 'marginTop': '0'}),
+
+        html.Div(id='trend-analysis-conclusion', style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px',
+            'margin': '20px'
+        })
     ])
 
 
@@ -451,7 +559,7 @@ def render_navbar(pathname, stored_data):
     State('stored-data', 'data')
 )
 def display_page(pathname, stored_data):
-    if pathname == '/analysis':
+    if pathname in ['/analysis', '/trend']:
         if stored_data is None:
             return html.Div([
                 html.Div([
@@ -482,7 +590,10 @@ def display_page(pathname, stored_data):
                     'maxWidth': '600px'
                 })
             ])
-        return analysis_page()
+        if pathname == '/analysis':
+            return analysis_page()
+        else:
+            return trend_page()
     else:
         return upload_page()
 
@@ -597,6 +708,284 @@ def handle_upload(contents, filename, existing_data, existing_report):
         preview_table,
         quality_content
     )
+
+
+@callback(
+    Output('trend-filters-container', 'children'),
+    Input('stored-data', 'data')
+)
+def render_trend_filters(df_json):
+    if df_json is None:
+        return html.Div()
+
+    df = pd.read_json(df_json, orient='split')
+    dimensions = get_available_dimensions(df)
+
+    children = []
+
+    children.append(html.Div([
+        html.Label('时间粒度', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
+        dcc.RadioItems(
+            id='time-granularity',
+            options=[
+                {'label': '按日', 'value': '日'},
+                {'label': '按周', 'value': '周'},
+                {'label': '按月', 'value': '月'}
+            ],
+            value='日',
+            inline=True,
+            labelStyle={'marginRight': '20px', 'fontSize': '14px'}
+        )
+    ], style={'marginBottom': '20px'}))
+
+    filter_row = []
+
+    if dimensions.get('产品类别'):
+        filter_row.append(html.Div([
+            html.Label('产品类别', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
+            dcc.Dropdown(
+                id='category-filter',
+                options=[{'label': c, 'value': c} for c in dimensions['产品类别']],
+                value=None,
+                multi=True,
+                placeholder='选择产品类别（可多选）',
+                style={'width': '100%'}
+            )
+        ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px'}))
+
+    if dimensions.get('地区'):
+        filter_row.append(html.Div([
+            html.Label('地区', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
+            dcc.Dropdown(
+                id='region-filter',
+                options=[{'label': r, 'value': r} for r in dimensions['地区']],
+                value=None,
+                multi=True,
+                placeholder='选择地区（可多选）',
+                style={'width': '100%'}
+            )
+        ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px'}))
+
+    if dimensions.get('类型'):
+        filter_row.append(html.Div([
+            html.Label('销售类型', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
+            dcc.Dropdown(
+                id='type-filter',
+                options=[{'label': t, 'value': t} for t in dimensions['类型']],
+                value=None,
+                multi=True,
+                placeholder='选择类型（可多选）',
+                style={'width': '100%'}
+            )
+        ], style={'flex': '1', 'minWidth': '200px'}))
+
+    if filter_row:
+        children.append(html.Div(filter_row, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'alignItems': 'flex-end'}))
+
+    children.append(html.Div([
+        html.Label('分组维度', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
+        dcc.Dropdown(
+            id='group-dimension',
+            options=[{'label': '不分组', 'value': 'none'}] + [
+                {'label': k, 'value': k} for k in dimensions.keys()
+            ],
+            value='none',
+            placeholder='选择图表分组维度',
+            style={'width': '100%'}
+        )
+    ], style={'marginTop': '20px'}))
+
+    children.append(html.Div([
+        html.Label('移动平均期数', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
+        dcc.Slider(
+            id='ma-window',
+            min=2,
+            max=min(10, len(df) if len(df) > 2 else 3),
+            step=1,
+            value=3,
+            marks={i: str(i) for i in range(2, min(11, (len(df) if len(df) > 2 else 4)))},
+            tooltip={'placement': 'bottom'}
+        )
+    ], style={'marginTop': '20px'}))
+
+    return html.Div(children)
+
+
+def process_trend_data(df_json, granularity, categories, regions, types, group_dim):
+    if df_json is None:
+        return None, None
+
+    df = pd.read_json(df_json, orient='split')
+    df = filter_data(df, categories, regions, types)
+
+    if len(df) == 0:
+        return None, None
+
+    time_col = '期间' if '期间' in df.columns else df.columns[0]
+    group_col = None
+    if group_dim and group_dim != 'none':
+        group_col = group_dim
+
+    agg_df = aggregate_by_time_granularity(df, time_col, '销售额', granularity, group_col)
+
+    return df, agg_df
+
+
+@callback(
+    Output('trend-line-chart', 'figure'),
+    Output('trend-area-chart', 'figure'),
+    Output('trend-combined-chart', 'figure'),
+    Output('trend-ma-chart', 'figure'),
+    Output('trend-analysis-conclusion', 'children'),
+    Input('stored-data', 'data'),
+    Input('time-granularity', 'value'),
+    Input('category-filter', 'value'),
+    Input('region-filter', 'value'),
+    Input('type-filter', 'value'),
+    Input('group-dimension', 'value'),
+    Input('ma-window', 'value')
+)
+def update_trend_charts(df_json, granularity, categories, regions, types, group_dim, ma_window):
+    if df_json is None:
+        empty_fig = {
+            'data': [],
+            'layout': {
+                'title': {'text': '暂无数据', 'x': 0.5},
+                'xaxis': {'visible': False},
+                'yaxis': {'visible': False}}}
+        return empty_fig, empty_fig, empty_fig, empty_fig, html.Div()
+
+    original_df, agg_df = process_trend_data(df_json, granularity, categories, regions, types, group_dim)
+
+    if agg_df is None or len(agg_df) == 0 or agg_df.empty:
+        empty_fig = {
+            'data': [],
+            'layout': {
+                'title': {'text': '暂无数据', 'x': 0.5},
+                'xaxis': {'visible': False},
+                'yaxis': {'visible': False},
+                'annotations': [{
+                    'text': '请选择筛选条件后查看数据',
+                    'showarrow': False,
+                    'font': {'size': 16}}]}}
+        return empty_fig, empty_fig, empty_fig, empty_fig, html.Div('暂无数据，请调整筛选条件')
+
+    group_col = group_dim if group_dim and group_dim != 'none' else None
+
+    line_fig = create_line_chart(agg_df, group_col=group_col,
+                            title=f'销售趋势折线图（{granularity}度）')
+    area_fig = create_area_chart(agg_df, group_col=group_col,
+                                title=f'销售趋势面积图（{granularity}度）')
+    combined_fig = create_combined_chart(agg_df, group_col=group_col,
+                               title=f'销售趋势组合图（{granularity}度）')
+
+    ma_df = agg_df.groupby('时间', as_index=False)['销售额'].sum() if group_col else agg_df
+    ma_fig = create_moving_average_chart(ma_df, window=ma_window or 3,
+                                  title=f'销售额及{ma_window or 3}期移动平均（{granularity}度）')
+
+    conclusion = build_trend_conclusion(ma_df, original_df)
+
+    return line_fig, area_fig, combined_fig, ma_fig, conclusion
+
+
+def build_trend_conclusion(agg_df, original_df):
+    if agg_df is None or len(agg_df) < 2:
+        return html.Div([
+            html.H3('趋势分析结论', style={'color': '#333', 'marginBottom': '15px'}),
+            html.P('数据点不足，无法进行趋势分析', style={'color': '#999'})
+        ])
+
+    children = []
+    children.append(html.H3('趋势分析结论', style={'color': '#333', 'marginBottom': '20px'}))
+
+    growth = calculate_growth_rate(agg_df)
+    seasonality = detect_seasonality(agg_df)
+    anomalies = detect_anomalies(agg_df)
+
+    children.append(html.Div([
+        html.H4('📈 增长率分析', style={'color': '#2E86AB', 'marginBottom': '12px'}),
+        html.Div([
+            html.Div([
+                html.Div([
+                    html.P('累计增长率', style={'color': '#666', 'fontSize': '14px', 'margin': '0'}),
+                    html.P(
+                        f"{growth['total_growth_rate']:.2f}%" if growth['total_growth_rate'] is not None else 'N/A',
+                        style={'fontSize': '28px', 'fontWeight': 'bold',
+                               'color': '#27ae60' if (growth['total_growth_rate'] or 0) >= 0 else '#e74c3c',
+                               'margin': '5px 0 0 0'}
+                    )
+                ], style={'textAlign': 'center', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'flex': '1'}),
+                html.Div([
+                    html.P('平均环比增长率', style={'color': '#666', 'fontSize': '14px', 'margin': '0'}),
+                    html.P(
+                        f"{growth['avg_growth_rate']:.2f}%" if growth['avg_growth_rate'] is not None else 'N/A',
+                        style={'fontSize': '28px', 'fontWeight': 'bold',
+                               'color': '#27ae60' if (growth['avg_growth_rate'] or 0) >= 0 else '#e74c3c',
+                               'margin': '5px 0 0 0'}
+                    )
+                ], style={'textAlign': 'center', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'flex': '1'}),
+                html.Div([
+                    html.P('整体趋势', style={'color': '#666', 'fontSize': '14px', 'margin': '0'}),
+                    html.P(
+                        {'up': '📈 上升趋势', 'down': '📉 下降趋势', 'stable': '➡️ 平稳趋势'}.get(growth['trend'], '未知'),
+                        style={'fontSize': '20px', 'fontWeight': 'bold',
+                               'color': '#27ae60' if growth['trend'] == 'up' else (
+                                   '#e74c3c' if growth['trend'] == 'down' else '#F18F01'),
+                               'margin': '5px 0 0 0'}
+                    )
+                ], style={'textAlign': 'center', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px', 'flex': '1'})
+            ], style={'display': 'flex', 'gap': '15px', 'marginTop': '10px'})
+        ])
+    ], style={'marginBottom': '25px', 'padding': '20px', 'backgroundColor': '#eaf4fb', 'borderRadius': '10px'}))
+
+    seasonality_children = []
+    if seasonality['has_seasonality']:
+        seasonality_children.append(html.Div([
+            html.Strong('季节性模式: ', style={'color': '#F18F01'}),
+            html.Span(seasonality['seasonal_pattern'] or '检测到季节性特征', style={'color': '#333'})
+        ], style={'marginBottom': '10px'}))
+        if seasonality['peak_periods']:
+            seasonality_children.append(html.Div([
+                html.Strong('旺季时段: ', style={'color': '#27ae60'}),
+                html.Span('、'.join(seasonality['peak_periods']), style={'color': '#333'})
+            ], style={'marginBottom': '8px'}))
+        if seasonality['low_periods']:
+            seasonality_children.append(html.Div([
+                html.Strong('淡季时段: ', style={'color': '#e74c3c'}),
+                html.Span('、'.join(seasonality['low_periods']), style={'color': '#333'})
+            ]))
+    else:
+        seasonality_children.append(html.Div(
+            '未检测到明显的季节性模式，销售数据相对平稳',
+            style={'color': '#666'}
+        ))
+
+    children.append(html.Div([
+        html.H4('🌊 季节性模式识别', style={'color': '#F18F01', 'marginBottom': '12px'}),
+        html.Div(seasonality_children)
+    ], style={'marginBottom': '25px', 'padding': '20px', 'backgroundColor': '#fff8e6', 'borderRadius': '10px'}))
+
+    anomaly_children = []
+    if anomalies:
+        for a in anomalies:
+            color = '#e74c3c' if '偏低' in a['type'] else '#C73E1D'
+            anomaly_children.append(html.Div([
+                html.Strong(f"[{a['time']}] ", style={'color': color}),
+                html.Span(f"{a['type']}: 销售额 {a['value']:,.0f}，偏离均值 {a['deviation']:+.2f}%",
+                          style={'color': '#333'})
+            ], style={'padding': '8px 0', 'borderBottom': '1px solid #eee'}))
+    else:
+        anomaly_children.append(html.Div(
+            '✅ 未检测到异常波动，数据表现正常',
+            style={'color': '#27ae60'}
+        ))
+
+    children.append(html.Div([
+        html.H4('⚠️ 异常波动提醒', style={'color': '#C73E1D', 'marginBottom': '12px'}),
+        html.Div(anomaly_children)
+    ], style={'padding': '20px', 'backgroundColor': '#fdecea' if anomalies else '#e8f8f0', 'borderRadius': '10px'}))
+
+    return html.Div(children)
 
 
 if __name__ == '__main__':

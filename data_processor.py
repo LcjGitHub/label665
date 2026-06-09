@@ -220,3 +220,229 @@ def process_uploaded_data(contents: str, filename: str) -> Dict[str, Any]:
         result['errors'].extend(quality_report['validation_errors'])
 
     return result
+
+
+def try_parse_datetime(series: pd.Series) -> pd.Series:
+    try:
+        return pd.to_datetime(series, errors='coerce')
+    except Exception:
+        return pd.Series([pd.NaT] * len(series))
+
+
+def aggregate_by_time_granularity(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str,
+    granularity: str = '日',
+    group_col: Optional[str] = None
+) -> pd.DataFrame:
+    result_df = df.copy()
+
+    if not pd.api.types.is_datetime64_any_dtype(result_df[time_col]):
+        result_df['_parsed_time'] = try_parse_datetime(result_df[time_col])
+        if result_df['_parsed_time'].isna().all():
+            result_df['时间'] = result_df[time_col].astype(str)
+            agg_col = '时间'
+        else:
+            result_df[time_col] = result_df['_parsed_time']
+            if granularity == '日':
+                result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
+            elif granularity == '周':
+                result_df['时间'] = result_df[time_col].dt.strftime('%Y-W%W')
+            elif granularity == '月':
+                result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m')
+            else:
+                result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
+            agg_col = '时间'
+    else:
+        if granularity == '日':
+            result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
+        elif granularity == '周':
+            result_df['时间'] = result_df[time_col].dt.strftime('%Y-W%W')
+        elif granularity == '月':
+            result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m')
+        else:
+            result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
+        agg_col = '时间'
+
+    if group_col and group_col in result_df.columns:
+        agg_df = result_df.groupby([agg_col, group_col], as_index=False)[value_col].sum()
+    else:
+        agg_df = result_df.groupby([agg_col], as_index=False)[value_col].sum()
+
+    return agg_df
+
+
+def calculate_growth_rate(df: pd.DataFrame, value_col: str = '销售额') -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        'total_growth_rate': None,
+        'period_growth_rates': [],
+        'avg_growth_rate': None,
+        'trend': 'stable'
+    }
+
+    if len(df) < 2:
+        return result
+
+    sorted_df = df.sort_values('时间').reset_index(drop=True)
+    values = sorted_df[value_col].values
+
+    total_first = values[0]
+    total_last = values[-1]
+    if total_first > 0:
+        result['total_growth_rate'] = round((total_last - total_first) / total_first * 100, 2)
+
+    period_rates = []
+    for i in range(1, len(values)):
+        if values[i - 1] > 0:
+            rate = round((values[i] - values[i - 1]) / values[i - 1] * 100, 2)
+            period_rates.append({
+                'period': f"{sorted_df['时间'].iloc[i-1]} → {sorted_df['时间'].iloc[i]}",
+                'rate': rate
+            })
+
+    result['period_growth_rates'] = period_rates
+    if period_rates:
+        result['avg_growth_rate'] = round(
+            sum(r['rate'] for r in period_rates) / len(period_rates), 2
+        )
+        if result['avg_growth_rate'] > 5:
+            result['trend'] = 'up'
+        elif result['avg_growth_rate'] < -5:
+            result['trend'] = 'down'
+        else:
+            result['trend'] = 'stable'
+
+    return result
+
+
+def detect_seasonality(df: pd.DataFrame, value_col: str = '销售额') -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        'has_seasonality': False,
+        'seasonal_pattern': None,
+        'peak_periods': [],
+        'low_periods': []
+    }
+
+    if len(df) < 4:
+        return result
+
+    sorted_df = df.sort_values('时间').reset_index(drop=True)
+    values = sorted_df[value_col].values
+    times = sorted_df['时间'].values
+
+    mean_val = values.mean()
+    std_val = values.std() if len(values) > 1 else 0
+
+    if std_val == 0:
+        return result
+
+    cv = std_val / mean_val if mean_val != 0 else 0
+
+    if cv > 0.3:
+        result['has_seasonality'] = True
+
+        peak_indices = [i for i, v in enumerate(values) if v > mean_val + std_val]
+        low_indices = [i for i, v in enumerate(values) if v < mean_val - std_val]
+
+        result['peak_periods'] = [str(times[i]) for i in peak_indices]
+        result['low_periods'] = [str(times[i]) for i in low_indices]
+
+        if peak_indices and low_indices:
+            if len(peak_indices) >= 2 and len(low_indices) >= 2:
+                result['seasonal_pattern'] = '存在明显的周期性波动模式'
+            else:
+                result['seasonal_pattern'] = '存在部分季节性特征'
+        elif peak_indices:
+            result['seasonal_pattern'] = '存在旺季特征'
+        elif low_indices:
+            result['seasonal_pattern'] = '存在淡季特征'
+
+    return result
+
+
+def detect_anomalies(df: pd.DataFrame, value_col: str = '销售额') -> List[Dict[str, Any]]:
+    anomalies = []
+
+    if len(df) < 4:
+        return anomalies
+
+    sorted_df = df.sort_values('时间').reset_index(drop=True)
+    values = sorted_df[value_col].values
+    times = sorted_df['时间'].values
+
+    q1 = np.percentile(values, 25)
+    q3 = np.percentile(values, 75)
+    iqr = q3 - q1
+
+    if iqr == 0:
+        return anomalies
+
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+
+    for i, v in enumerate(values):
+        if v < lower_bound:
+            anomalies.append({
+                'time': str(times[i]),
+                'value': float(v),
+                'type': '偏低异常',
+                'deviation': round((v - np.mean(values)) / np.mean(values) * 100, 2) if np.mean(values) != 0 else 0
+            })
+        elif v > upper_bound:
+            anomalies.append({
+                'time': str(times[i]),
+                'value': float(v),
+                'type': '偏高异常',
+                'deviation': round((v - np.mean(values)) / np.mean(values) * 100, 2) if np.mean(values) != 0 else 0
+            })
+
+    return anomalies
+
+
+def get_available_dimensions(df: pd.DataFrame) -> Dict[str, List[str]]:
+    dimensions: Dict[str, List[str]] = {}
+
+    if '产品类别' in df.columns:
+        categories = df['产品类别'].dropna().unique().tolist()
+        dimensions['产品类别'] = [str(c) for c in categories]
+    elif '类别' in df.columns:
+        categories = df['类别'].dropna().unique().tolist()
+        dimensions['产品类别'] = [str(c) for c in categories]
+
+    if '地区' in df.columns:
+        regions = df['地区'].dropna().unique().tolist()
+        dimensions['地区'] = [str(r) for r in regions]
+    elif '区域' in df.columns:
+        regions = df['区域'].dropna().unique().tolist()
+        dimensions['地区'] = [str(r) for r in regions]
+
+    if '类型' in df.columns:
+        types = df['类型'].dropna().unique().tolist()
+        dimensions['类型'] = [str(t) for t in types]
+
+    return dimensions
+
+
+def filter_data(
+    df: pd.DataFrame,
+    categories: Optional[List[str]] = None,
+    regions: Optional[List[str]] = None,
+    types: Optional[List[str]] = None
+) -> pd.DataFrame:
+    result = df.copy()
+
+    if categories:
+        cat_col = '产品类别' if '产品类别' in result.columns else ('类别' if '类别' in result.columns else None)
+        if cat_col:
+            result = result[result[cat_col].astype(str).isin(categories)]
+
+    if regions:
+        reg_col = '地区' if '地区' in result.columns else ('区域' if '区域' in result.columns else None)
+        if reg_col:
+            result = result[result[reg_col].astype(str).isin(regions)]
+
+    if types and '类型' in result.columns:
+        result = result[result['类型'].astype(str).isin(types)]
+
+    return result
