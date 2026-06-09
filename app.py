@@ -1,6 +1,7 @@
 import dash
 from dash import html, dcc, dash_table, Input, Output, State, callback
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 import json
 from data_processor import (
@@ -12,6 +13,9 @@ from data_processor import (
 from trend_charts import (
     create_line_chart, create_area_chart,
     create_combined_chart
+)
+from promo_evaluation import (
+    evaluate_promo_activity, get_promo_activity_types
 )
 
 app = dash.Dash(__name__)
@@ -34,6 +38,7 @@ def navbar(current_path, data_valid):
     upload_active = current_path == '/' or current_path == '/upload'
     analysis_active = current_path == '/analysis'
     trend_active = current_path == '/trend'
+    evaluation_active = current_path == '/evaluation'
 
     if data_valid:
         analysis_link = dcc.Link('促销分析', href='/analysis', style={
@@ -51,6 +56,15 @@ def navbar(current_path, data_valid):
             'padding': '15px 25px',
             'backgroundColor': '#2E86AB' if trend_active else 'transparent',
             'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'marginRight': '10px'
+        })
+        evaluation_link = dcc.Link('效果评估', href='/evaluation', style={
+            'color': 'white',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#2E86AB' if evaluation_active else 'transparent',
+            'borderRadius': '5px',
             'fontWeight': 'bold'
         })
     else:
@@ -65,6 +79,16 @@ def navbar(current_path, data_valid):
             'marginRight': '10px'
         })
         trend_link = html.Span('趋势分析', title='请先上传并验证数据', style={
+            'color': '#888',
+            'textDecoration': 'none',
+            'padding': '15px 25px',
+            'backgroundColor': '#333',
+            'borderRadius': '5px',
+            'fontWeight': 'bold',
+            'cursor': 'not-allowed',
+            'marginRight': '10px'
+        })
+        evaluation_link = html.Span('效果评估', title='请先上传并验证数据', style={
             'color': '#888',
             'textDecoration': 'none',
             'padding': '15px 25px',
@@ -92,7 +116,8 @@ def navbar(current_path, data_valid):
                 'marginRight': '10px'
             }),
             analysis_link,
-            trend_link
+            trend_link,
+            evaluation_link
         ], style={
             'display': 'flex',
             'alignItems': 'center',
@@ -261,6 +286,30 @@ def trend_page():
             'padding': '25px',
             'margin': '20px'
         })
+    ])
+
+
+def evaluation_page():
+    return html.Div([
+        html.H1(
+            '促销活动效果评估',
+            style={
+                'textAlign': 'center',
+                'color': '#2E86AB',
+                'marginBottom': '30px',
+                'marginTop': '30px'
+            }
+        ),
+
+        html.Div(id='eval-config-container', style={
+            'backgroundColor': 'white',
+            'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px',
+            'margin': '20px'
+        }),
+
+        html.Div(id='eval-results-container')
     ])
 
 
@@ -559,7 +608,7 @@ def render_navbar(pathname, stored_data):
     State('stored-data', 'data')
 )
 def display_page(pathname, stored_data):
-    if pathname in ['/analysis', '/trend']:
+    if pathname in ['/analysis', '/trend', '/evaluation']:
         if stored_data is None:
             return html.Div([
                 html.Div([
@@ -592,8 +641,10 @@ def display_page(pathname, stored_data):
             ])
         if pathname == '/analysis':
             return analysis_page()
-        else:
+        elif pathname == '/trend':
             return trend_page()
+        else:
+            return evaluation_page()
     else:
         return upload_page()
 
@@ -933,6 +984,477 @@ def build_trend_conclusion(agg_df, original_df):
     ], style={'padding': '20px', 'backgroundColor': '#fdecea' if anomalies else '#e8f8f0', 'borderRadius': '10px'}))
 
     return html.Div(children)
+
+
+def build_eval_config_content(df_json):
+    if df_json is None:
+        return html.Div()
+
+    df = pd.read_json(df_json, orient='split')
+    activity_types = get_promo_activity_types(df)
+
+    if not activity_types:
+        return html.Div('未检测到有效的促销活动类型', style={'color': '#e74c3c'})
+
+    children = []
+
+    children.append(html.Div([
+        html.H3('活动选择与指标权重配置', style={'color': '#333', 'marginBottom': '20px'}),
+        html.Div([
+            html.Label('选择促销活动', style={
+                'fontWeight': 'bold', 'color': '#333',
+                'marginBottom': '8px', 'display': 'block', 'fontSize': '14px'
+            }),
+            dcc.Dropdown(
+                id='eval-activity-select',
+                options=[{'label': a, 'value': a} for a in activity_types],
+                value=activity_types[0],
+                style={'width': '100%', 'marginBottom': '20px'}
+            )
+        ], style={'marginBottom': '20px'}),
+
+        html.Div([
+            html.H4('指标权重配置（总和自动归一化为100%）', style={
+                'color': '#333', 'marginBottom': '15px', 'fontSize': '15px'
+            }),
+            html.Div([
+                html.Div([
+                    html.Label('ROI 权重', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
+                    }),
+                    dcc.Slider(
+                        id='weight-roi',
+                        min=0,
+                        max=100,
+                        value=30,
+                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        step=5
+                    )
+                ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
+
+                html.Div([
+                    html.Label('销售增量 权重', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
+                    }),
+                    dcc.Slider(
+                        id='weight-lift',
+                        min=0,
+                        max=100,
+                        value=25,
+                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        step=5
+                    )
+                ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
+
+                html.Div([
+                    html.Label('客户获取 权重', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
+                    }),
+                    dcc.Slider(
+                        id='weight-cac',
+                        min=0,
+                        max=100,
+                        value=20,
+                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        step=5
+                    )
+                ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
+
+                html.Div([
+                    html.Label('利润边际 权重', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
+                    }),
+                    dcc.Slider(
+                        id='weight-margin',
+                        min=0,
+                        max=100,
+                        value=25,
+                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        step=5
+                    )
+                ], style={'flex': '1', 'minWidth': '200px', 'marginBottom': '15px'})
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px'}),
+
+            html.Div(id='weight-summary', style={
+                'marginTop': '10px', 'padding': '10px',
+                'backgroundColor': '#eaf4fb', 'borderRadius': '6px',
+                'fontSize': '13px', 'color': '#2E86AB'
+            })
+        ])
+    ]))
+
+    return html.Div(children)
+
+
+def create_radar_chart(radar_data, activity_name):
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatterpolar(
+        r=radar_data['评分'] + [radar_data['评分'][0]],
+        theta=radar_data['指标'] + [radar_data['指标'][0]],
+        fill='toself',
+        name=activity_name,
+        line=dict(color='#2E86AB', width=3),
+        fillcolor='rgba(46, 134, 171, 0.3)',
+        marker=dict(size=10, color='#2E86AB')
+    ))
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 100],
+                tickfont=dict(size=10)
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=13, color='#333')
+            )
+        ),
+        showlegend=False,
+        title=dict(
+            text=f'{activity_name} - 综合评分雷达图',
+            x=0.5,
+            xanchor='center',
+            font=dict(size=16, color='#333')
+        ),
+        margin=dict(l=30, r=30, t=80, b=30),
+        paper_bgcolor='white'
+    )
+
+    return fig
+
+
+def build_eval_results_content(eval_result):
+    if eval_result is None:
+        return html.Div()
+
+    activity_name = eval_result['活动名称']
+    comprehensive = eval_result['综合评分']
+    radar_data = eval_result['雷达图数据']
+    weights = eval_result['权重配置']
+
+    children = []
+
+    children.append(html.Div([
+        html.Div([
+            html.H3('综合评分概览', style={'color': '#333', 'marginBottom': '15px'}),
+            html.Div([
+                html.Div([
+                    html.Div('综合评分', style={
+                        'color': '#666', 'fontSize': '14px', 'marginBottom': '5px'
+                    }),
+                    html.Div(f"{comprehensive['综合评分']:.2f}", style={
+                        'fontSize': '48px', 'fontWeight': 'bold',
+                        'color': '#2E86AB'
+                    }),
+                    html.Div(comprehensive['评级'], style={
+                        'fontSize': '18px', 'fontWeight': 'bold',
+                        'color': '#F18F01', 'marginTop': '5px'
+                    })
+                ], style={
+                    'textAlign': 'center', 'padding': '20px',
+                    'backgroundColor': '#eaf4fb', 'borderRadius': '10px',
+                    'flex': '1'
+                }),
+
+                html.Div([
+                    html.Div([
+                        html.Div('各维度评分：', style={
+                            'fontWeight': 'bold', 'color': '#333',
+                            'marginBottom': '12px', 'fontSize': '14px'
+                        })
+                    ]),
+                    html.Div([
+                        html.Div([
+                            html.Span(dim, style={
+                                'display': 'inline-block', 'width': '90px',
+                                'color': '#666', 'fontSize': '13px'
+                            }),
+                            html.Div([
+                                html.Div(style={
+                                    'width': f"{score}%",
+                                    'height': '18px',
+                                    'backgroundColor': '#2E86AB' if score >= 70 else (
+                                        '#F18F01' if score >= 50 else '#e74c3c'
+                                    ),
+                                    'borderRadius': '4px',
+                                    'display': 'inline-block'
+                                })
+                            ], style={
+                                'display': 'inline-block',
+                                'width': '150px',
+                                'backgroundColor': '#f0f0f0',
+                                'borderRadius': '4px',
+                                'height': '18px',
+                                'overflow': 'hidden',
+                                'verticalAlign': 'middle'
+                            }),
+                            html.Span(f" {score:.1f}分", style={
+                                'fontWeight': 'bold', 'color': '#333',
+                                'fontSize': '13px', 'marginLeft': '8px'
+                            })
+                        ], style={'marginBottom': '10px'})
+                        for dim, score in comprehensive['维度评分'].items()
+                    ])
+                ], style={'flex': '2', 'padding': '20px'})
+            ], style={'display': 'flex', 'gap': '20px', 'alignItems': 'center'})
+        ], style={
+            'backgroundColor': 'white', 'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px', 'margin': '20px'
+        }),
+
+        html.Div([
+            html.Div([
+                html.H3('综合评分雷达图', style={'color': '#333', 'marginBottom': '15px'}),
+                dcc.Graph(figure=create_radar_chart(radar_data, activity_name))
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px 10px'
+            }),
+
+            html.Div([
+                html.H3('历史活动对比', style={'color': '#333', 'marginBottom': '15px'}),
+                _build_history_comparison_panel(eval_result['历史对比'])
+            ], style={
+                'backgroundColor': 'white', 'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'padding': '20px', 'margin': '20px 10px'
+            })
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'}),
+
+        html.Div([
+            html.H3('核心指标详细分析', style={'color': '#333', 'marginBottom': '20px'}),
+            _build_detail_tables(eval_result)
+        ], style={
+            'backgroundColor': 'white', 'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px', 'margin': '20px'
+        }),
+
+        html.Div([
+            html.H3('改进建议', style={'color': '#333', 'marginBottom': '15px'}),
+            html.Div([
+                html.Div([
+                    html.Div('💡', style={'fontSize': '22px', 'marginRight': '10px'}),
+                    html.Div(suggestion, style={
+                        'color': '#333', 'lineHeight': '1.8',
+                        'fontSize': '14px', 'flex': '1'
+                    })
+                ], style={
+                    'display': 'flex', 'alignItems': 'flex-start',
+                    'padding': '15px', 'marginBottom': '10px',
+                    'backgroundColor': '#fffaf0', 'borderLeft': '4px solid #F18F01',
+                    'borderRadius': '6px'
+                })
+                for suggestion in eval_result['改进建议']
+            ])
+        ], style={
+            'backgroundColor': 'white', 'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px', 'margin': '20px'
+        })
+    ]))
+
+    return html.Div(children)
+
+
+def _build_history_comparison_panel(history_data):
+    children = []
+
+    children.append(html.Div([
+        html.Div([
+            html.Div('历史排名', style={
+                'color': '#666', 'fontSize': '13px', 'marginBottom': '4px'
+            }),
+            html.Div(history_data['历史排名'], style={
+                'fontSize': '20px', 'fontWeight': 'bold', 'color': '#2E86AB'
+            })
+        ], style={'textAlign': 'center', 'flex': '1', 'padding': '10px'}),
+
+        html.Div([
+            html.Div('相对历史平均', style={
+                'color': '#666', 'fontSize': '13px', 'marginBottom': '4px'
+            }),
+            html.Div(
+                f"{history_data['相对历史平均']:+.2f}分",
+                style={
+                    'fontSize': '20px', 'fontWeight': 'bold',
+                    'color': '#27ae60' if history_data['相对历史平均'] >= 0 else '#e74c3c'
+                }
+            )
+        ], style={'textAlign': 'center', 'flex': '1', 'padding': '10px'}),
+
+        html.Div([
+            html.Div('历史最高分', style={
+                'color': '#666', 'fontSize': '13px', 'marginBottom': '4px'
+            }),
+            html.Div(f"{history_data['历史最高分']:.2f}", style={
+                'fontSize': '20px', 'fontWeight': 'bold', 'color': '#F18F01'
+            })
+        ], style={'textAlign': 'center', 'flex': '1', 'padding': '10px'})
+    ], style={'display': 'flex', 'marginBottom': '15px', 'padding': '10px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px'}))
+
+    children.append(html.Div([
+        html.Div(history_data['对比结论'], style={
+            'padding': '12px', 'backgroundColor': '#eaf4fb',
+            'borderRadius': '6px', 'color': '#2E86AB',
+            'fontSize': '13px', 'lineHeight': '1.6'
+        })
+    ], style={'marginBottom': '15px'}))
+
+    dim_data = history_data['维度对比']
+    dim_rows = []
+    for dim, info in dim_data.items():
+        dim_rows.append({
+            '评估维度': dim,
+            '当前评分': info['当前评分'],
+            '历史平均': info['历史平均'],
+            '差异': f"{info['差异']:+.2f}"
+        })
+
+    children.append(html.Div([
+        html.Label('各维度与历史对比', style={
+            'fontWeight': 'bold', 'color': '#333',
+            'fontSize': '13px', 'marginBottom': '8px', 'display': 'block'
+        }),
+        dash_table.DataTable(
+            data=dim_rows,
+            columns=[
+                {'name': '评估维度', 'id': '评估维度'},
+                {'name': '当前评分', 'id': '当前评分'},
+                {'name': '历史平均', 'id': '历史平均'},
+                {'name': '差异', 'id': '差异'}
+            ],
+            style_cell={'padding': '8px', 'textAlign': 'center', 'fontSize': '13px'},
+            style_header={
+                'backgroundColor': '#f0f0f0', 'fontWeight': 'bold',
+                'fontSize': '13px', 'textAlign': 'center'
+            },
+            style_table={'overflowX': 'auto'}
+        )
+    ]))
+
+    return html.Div(children)
+
+
+def _build_detail_tables(eval_result):
+    roi = eval_result['ROI分析']
+    inc = eval_result['增量销售分析']
+    cac = eval_result['客户获取分析']
+    margin = eval_result['利润边际分析']
+
+    def _make_table(data_dict, title, grade_key=None):
+        rows = []
+        for k, v in data_dict.items():
+            if k == grade_key:
+                continue
+            rows.append({'指标': k, '数值': v})
+
+        header_style = {'backgroundColor': '#f0f0f0', 'fontWeight': 'bold'}
+        cell_style = {'padding': '10px', 'textAlign': 'left', 'fontSize': '13px'}
+
+        table_content = [
+            dash_table.DataTable(
+                data=rows,
+                columns=[{'name': '指标', 'id': '指标'}, {'name': '数值', 'id': '数值'}],
+                style_cell=cell_style,
+                style_header=header_style,
+                style_table={'overflowX': 'auto'}
+            )
+        ]
+
+        if grade_key and grade_key in data_dict:
+            table_content.insert(0, html.Div([
+                html.Span('等级评定: ', style={'color': '#666', 'fontSize': '13px'}),
+                html.Span(data_dict[grade_key], style={
+                    'fontWeight': 'bold', 'color': '#F18F01',
+                    'fontSize': '15px', 'marginLeft': '5px'
+                })
+            ], style={'marginBottom': '10px', 'padding': '8px', 'backgroundColor': '#fffaf0', 'borderRadius': '6px'}))
+
+        return html.Div([
+            html.H4(title, style={'color': '#2E86AB', 'marginBottom': '12px', 'fontSize': '15px'}),
+            html.Div(table_content)
+        ], style={'padding': '15px', 'backgroundColor': '#fafafa', 'borderRadius': '8px'})
+
+    return html.Div([
+        html.Div([
+            _make_table(roi, '📊 ROI 投资回报分析', 'ROI等级'),
+            _make_table(inc, '📈 增量销售分析', '提升等级')
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '20px', 'marginBottom': '20px'}),
+        html.Div([
+            _make_table(cac, '👥 客户获取成本分析', '客户质量等级'),
+            _make_table(margin, '💰 利润边际分析', '利润等级')
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '20px'})
+    ])
+
+
+@callback(
+    Output('eval-config-container', 'children'),
+    Input('stored-data', 'data')
+)
+def render_eval_config(df_json):
+    return build_eval_config_content(df_json)
+
+
+@callback(
+    Output('weight-summary', 'children'),
+    Input('weight-roi', 'value'),
+    Input('weight-lift', 'value'),
+    Input('weight-cac', 'value'),
+    Input('weight-margin', 'value')
+)
+def update_weight_summary(w_roi, w_lift, w_cac, w_margin):
+    total = w_roi + w_lift + w_cac + w_margin
+    if total == 0:
+        return html.Div('⚠️ 权重总和不能为 0，请调整权重配置', style={'color': '#e74c3c'})
+
+    n_roi = w_roi / total * 100
+    n_lift = w_lift / total * 100
+    n_cac = w_cac / total * 100
+    n_margin = w_margin / total * 100
+
+    return (
+        f'归一化后权重 → ROI: {n_roi:.1f}% | '
+        f'销售增量: {n_lift:.1f}% | '
+        f'客户获取: {n_cac:.1f}% | '
+        f'利润边际: {n_margin:.1f}%'
+    )
+
+
+@callback(
+    Output('eval-results-container', 'children'),
+    Input('stored-data', 'data'),
+    Input('eval-activity-select', 'value'),
+    Input('weight-roi', 'value'),
+    Input('weight-lift', 'value'),
+    Input('weight-cac', 'value'),
+    Input('weight-margin', 'value')
+)
+def update_eval_results(df_json, activity_type, w_roi, w_lift, w_cac, w_margin):
+    if df_json is None or activity_type is None:
+        return html.Div()
+
+    total = w_roi + w_lift + w_cac + w_margin
+    if total == 0:
+        return html.Div()
+
+    weights = {
+        'ROI': w_roi / total,
+        '销售增量': w_lift / total,
+        '客户获取': w_cac / total,
+        '利润边际': w_margin / total
+    }
+
+    df = pd.read_json(df_json, orient='split')
+    eval_result = evaluate_promo_activity(df, activity_type, weights)
+    return build_eval_results_content(eval_result)
 
 
 if __name__ == '__main__':
