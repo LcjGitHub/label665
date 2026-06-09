@@ -3266,35 +3266,26 @@ def download_word(n_clicks, report_data, include_charts):
 
 @callback(
     Output('activity-calendar-data', 'data'),
+    Output('calendar-current-month', 'data'),
     Input('stored-data', 'data')
 )
 def init_activity_calendar_data(df_json):
     if df_json is None:
-        return None
+        return None, None
     try:
         df = pd.read_json(df_json, orient='split')
         activity_data = extract_activity_dates(df)
-        return activity_data
+        if not activity_data.get('available', False):
+            return activity_data, None
+        date_range = get_date_range(activity_data)
+        if date_range is None:
+            return activity_data, None
+        min_date, max_date = date_range
+        mid_date = min_date + (max_date - min_date) / 2
+        current_month = {'year': mid_date.year, 'month': mid_date.month}
+        return activity_data, current_month
     except Exception:
-        return None
-
-
-@callback(
-    Output('calendar-current-month', 'data'),
-    Input('activity-calendar-data', 'data'),
-    prevent_initial_call=False
-)
-def init_calendar_month(activity_data):
-    if activity_data is None or not activity_data.get('available', False):
-        now = datetime.now()
-        return {'year': now.year, 'month': now.month}
-    date_range = get_date_range(activity_data)
-    if date_range is None:
-        now = datetime.now()
-        return {'year': now.year, 'month': now.month}
-    min_date, max_date = date_range
-    mid_date = min_date + (max_date - min_date) / 2
-    return {'year': mid_date.year, 'month': mid_date.month}
+        return None, None
 
 
 @callback(
@@ -3402,9 +3393,17 @@ def change_calendar_month(prev_clicks, next_clicks, current_month):
     if not ctx.triggered or current_month is None:
         return dash.no_update
 
-    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    trigger_prop = ctx.triggered[0]['prop_id']
+    trigger_id = trigger_prop.split('.')[0]
+    trigger_value = ctx.triggered[0].get('value', 0)
+
+    if trigger_value is None or trigger_value <= 0:
+        return dash.no_update
+
     year = current_month.get('year')
     month = current_month.get('month')
+    if year is None or month is None:
+        return dash.no_update
 
     if trigger_id == 'btn-calendar-prev':
         if month == 1:
@@ -3497,7 +3496,7 @@ def render_calendar_stats(activity_data, current_month):
             })
         ], style={'textAlign': 'center', 'flex': '1', 'padding': '8px'}),
         html.Div([
-            html.Div('日均销售', style={'color': '#666', 'fontSize': '12px', 'marginBottom': '3px'}),
+            html.Div('平均销售额', style={'color': '#666', 'fontSize': '12px', 'marginBottom': '3px'}),
             html.Div(f"¥{stats.get('avg_sales', 0):,.0f}", style={
                 'fontSize': '22px', 'fontWeight': 'bold', 'color': '#F18F01'
             })

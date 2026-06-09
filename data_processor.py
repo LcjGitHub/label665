@@ -490,6 +490,7 @@ def extract_activity_dates(df: pd.DataFrame) -> Dict[str, Any]:
         'activity_dates': {},
         'activity_colors': {},
         'activity_sales': {},
+        'activity_daily_sales': {},
         'available': False
     }
 
@@ -531,6 +532,7 @@ def extract_activity_dates(df: pd.DataFrame) -> Dict[str, Any]:
         result['activity_colors'][activity] = ACTIVITY_COLORS[idx % len(ACTIVITY_COLORS)]
         result['activity_dates'][activity] = []
         result['activity_sales'][activity] = 0.0
+        result['activity_daily_sales'][activity] = {}
 
     for _, row in df_copy.iterrows():
         activity_val = str(row.get(activity_col, '')) if activity_col else ''
@@ -546,7 +548,11 @@ def extract_activity_dates(df: pd.DataFrame) -> Dict[str, Any]:
             result['activity_dates'][activity_val].append(date_str)
         sales_val = row.get('销售额', 0)
         if pd.notna(sales_val):
-            result['activity_sales'][activity_val] += float(sales_val)
+            sale = float(sales_val)
+            result['activity_sales'][activity_val] += sale
+            if date_str not in result['activity_daily_sales'][activity_val]:
+                result['activity_daily_sales'][activity_val][date_str] = 0.0
+            result['activity_daily_sales'][activity_val][date_str] += sale
 
     for activity in activities:
         result['activity_dates'][activity].sort()
@@ -583,19 +589,24 @@ def get_monthly_activity_stats(
             for act in acts:
                 month_activities.add(act)
 
+    daily_sales_data = activity_data.get('activity_daily_sales', {})
+
     for activity in month_activities:
         act_dates = [d for d in activity_data.get('activity_dates', {}).get(activity, []) if d.startswith(month_prefix)]
-        act_sales = activity_data.get('activity_sales', {}).get(activity, 0.0)
         act_days = len(act_dates)
-        avg_sale = act_sales / act_days if act_days > 0 else 0
+        act_month_sales = 0.0
+        if activity in daily_sales_data:
+            for d in act_dates:
+                act_month_sales += daily_sales_data[activity].get(d, 0.0)
+        avg_sale = act_month_sales / act_days if act_days > 0 else 0
         stats['details'].append({
             'name': activity,
             'days': act_days,
-            'total_sales': round(act_sales, 2),
+            'total_sales': round(act_month_sales, 2),
             'avg_daily_sales': round(avg_sale, 2),
             'color': activity_data.get('activity_colors', {}).get(activity, '#2E86AB')
         })
-        total_sales += act_sales
+        total_sales += act_month_sales
 
     stats['activity_count'] = len(month_activities)
     stats['activity_names'] = sorted(list(month_activities))
