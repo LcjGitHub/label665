@@ -15,7 +15,7 @@ from trend_charts import (
     create_combined_chart
 )
 from promo_evaluation import (
-    evaluate_promo_activity, get_promo_activity_types
+    evaluate_promo_activity, get_activity_list
 )
 
 app = dash.Dash(__name__)
@@ -24,7 +24,9 @@ app.config.suppress_callback_exceptions = True
 app.layout = html.Div([
     dcc.Location(id='url', refresh=False),
     dcc.Store(id='stored-data', data=None),
+    dcc.Store(id='stored-data-local', data=None, storage_type='local'),
     dcc.Store(id='stored-quality-report', data=None),
+    dcc.Store(id='eval-result-store', data=None),
     html.Div(id='navbar-container'),
     html.Div(id='page-content')
 ], style={
@@ -593,6 +595,19 @@ def build_analysis_content(df_json):
 
 
 @callback(
+    Output('stored-data', 'data', allow_duplicate=True),
+    Input('url', 'pathname'),
+    State('stored-data-local', 'data'),
+    State('stored-data', 'data'),
+    prevent_initial_call='initial_duplicate'
+)
+def restore_data_from_local(pathname, local_data, current_data):
+    if current_data is None and local_data is not None:
+        return local_data
+    return dash.no_update
+
+
+@callback(
     Output('navbar-container', 'children'),
     Input('url', 'pathname'),
     Input('stored-data', 'data')
@@ -659,6 +674,7 @@ def render_analysis_content(df_json):
 
 @callback(
     Output('stored-data', 'data'),
+    Output('stored-data-local', 'data'),
     Output('stored-quality-report', 'data'),
     Output('upload-filename', 'children'),
     Output('upload-errors', 'children'),
@@ -678,6 +694,7 @@ def handle_upload(contents, filename, existing_data, existing_report):
     if not ctx.triggered:
         return (
             existing_data,
+            existing_data,
             existing_report,
             '',
             '',
@@ -689,6 +706,7 @@ def handle_upload(contents, filename, existing_data, existing_report):
 
     if contents is None:
         return (
+            existing_data,
             existing_data,
             existing_report,
             '',
@@ -750,6 +768,7 @@ def handle_upload(contents, filename, existing_data, existing_report):
         quality_content = build_quality_report_content(report)
 
     return (
+        stored_data,
         stored_data,
         stored_report,
         filename_display,
@@ -991,15 +1010,18 @@ def build_eval_config_content(df_json):
         return html.Div()
 
     df = pd.read_json(df_json, orient='split')
-    activity_types = get_promo_activity_types(df)
+    activity_types = get_activity_list(df)
 
     if not activity_types:
-        return html.Div('未检测到有效的促销活动类型', style={'color': '#e74c3c'})
+        return html.Div('未检测到有效的促销活动类型，请确认数据中包含活动名称列或类型列', style={
+            'color': '#e74c3c', 'padding': '20px', 'fontSize': '14px'
+        })
 
     children = []
 
     children.append(html.Div([
-        html.H3('活动选择与指标权重配置', style={'color': '#333', 'marginBottom': '20px'}),
+        html.H3('活动配置与评估参数', style={'color': '#333', 'marginBottom': '20px'}),
+
         html.Div([
             html.Label('选择促销活动', style={
                 'fontWeight': 'bold', 'color': '#333',
@@ -1009,7 +1031,7 @@ def build_eval_config_content(df_json):
                 id='eval-activity-select',
                 options=[{'label': a, 'value': a} for a in activity_types],
                 value=activity_types[0],
-                style={'width': '100%', 'marginBottom': '20px'}
+                style={'width': '100%'}
             )
         ], style={'marginBottom': '20px'}),
 
@@ -1019,7 +1041,7 @@ def build_eval_config_content(df_json):
             }),
             html.Div([
                 html.Div([
-                    html.Label('ROI 权重', style={
+                    html.Label('投资回报 权重', style={
                         'fontWeight': 'bold', 'color': '#333',
                         'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
                     }),
@@ -1028,7 +1050,7 @@ def build_eval_config_content(df_json):
                         min=0,
                         max=100,
                         value=30,
-                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        marks={i: f'{i}%' for i in range(0, 101, 25)},
                         step=5
                     )
                 ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
@@ -1043,7 +1065,7 @@ def build_eval_config_content(df_json):
                         min=0,
                         max=100,
                         value=25,
-                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        marks={i: f'{i}%' for i in range(0, 101, 25)},
                         step=5
                     )
                 ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
@@ -1058,7 +1080,7 @@ def build_eval_config_content(df_json):
                         min=0,
                         max=100,
                         value=20,
-                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        marks={i: f'{i}%' for i in range(0, 101, 25)},
                         step=5
                     )
                 ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
@@ -1073,7 +1095,7 @@ def build_eval_config_content(df_json):
                         min=0,
                         max=100,
                         value=25,
-                        marks={i: f'{i}%' for i in range(0, 101, 20)},
+                        marks={i: f'{i}%' for i in range(0, 101, 25)},
                         step=5
                     )
                 ], style={'flex': '1', 'minWidth': '200px', 'marginBottom': '15px'})
@@ -1084,7 +1106,73 @@ def build_eval_config_content(df_json):
                 'backgroundColor': '#eaf4fb', 'borderRadius': '6px',
                 'fontSize': '13px', 'color': '#2E86AB'
             })
-        ])
+        ], style={'marginBottom': '20px'}),
+
+        html.Div([
+            html.H4('活动参数配置（如数据中未包含，可手动填写）', style={
+                'color': '#333', 'marginBottom': '15px', 'fontSize': '15px'
+            }),
+            html.Div([
+                html.Div([
+                    html.Label('促销成本（元）', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
+                    }),
+                    dcc.Input(
+                        id='input-promo-cost',
+                        type='number',
+                        placeholder='请输入促销总成本',
+                        min=0,
+                        value=30000,
+                        style={
+                            'width': '100%', 'padding': '10px',
+                            'border': '1px solid #ddd', 'borderRadius': '5px',
+                            'fontSize': '14px'
+                        }
+                    ),
+                    html.Div('数据中包含促销成本/活动成本/营销费用列时将自动读取', style={
+                        'color': '#999', 'fontSize': '11px', 'marginTop': '5px'
+                    })
+                ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px', 'marginBottom': '15px'}),
+
+                html.Div([
+                    html.Label('新增客户数（人）', style={
+                        'fontWeight': 'bold', 'color': '#333',
+                        'marginBottom': '6px', 'display': 'block', 'fontSize': '13px'
+                    }),
+                    dcc.Input(
+                        id='input-new-customers',
+                        type='number',
+                        placeholder='请输入新增客户数量',
+                        min=0,
+                        value=500,
+                        style={
+                            'width': '100%', 'padding': '10px',
+                            'border': '1px solid #ddd', 'borderRadius': '5px',
+                            'fontSize': '14px'
+                        }
+                    ),
+                    html.Div('数据中包含新增客户数/新客户数/获客数列时将自动读取', style={
+                        'color': '#999', 'fontSize': '11px', 'marginTop': '5px'
+                    })
+                ], style={'flex': '1', 'minWidth': '200px', 'marginBottom': '15px'})
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px'})
+        ], style={'marginBottom': '20px', 'padding': '15px', 'backgroundColor': '#fafafa', 'borderRadius': '8px'}),
+
+        html.Div([
+            html.Button(
+                '生成评估结果',
+                id='btn-generate-eval',
+                n_clicks=0,
+                style={
+                    'backgroundColor': '#2E86AB', 'color': 'white',
+                    'padding': '12px 40px', 'border': 'none',
+                    'borderRadius': '6px', 'fontWeight': 'bold',
+                    'fontSize': '15px', 'cursor': 'pointer',
+                    'boxShadow': '0 2px 6px rgba(46, 134, 171, 0.4)'
+                }
+            )
+        ], style={'textAlign': 'center', 'marginTop': '10px'})
     ]))
 
     return html.Div(children)
@@ -1135,7 +1223,6 @@ def build_eval_results_content(eval_result):
     activity_name = eval_result['活动名称']
     comprehensive = eval_result['综合评分']
     radar_data = eval_result['雷达图数据']
-    weights = eval_result['权重配置']
 
     children = []
 
@@ -1171,7 +1258,7 @@ def build_eval_results_content(eval_result):
                     html.Div([
                         html.Div([
                             html.Span(dim, style={
-                                'display': 'inline-block', 'width': '90px',
+                                'display': 'inline-block', 'width': '100px',
                                 'color': '#666', 'fontSize': '13px'
                             }),
                             html.Div([
@@ -1219,14 +1306,23 @@ def build_eval_results_content(eval_result):
             }),
 
             html.Div([
-                html.H3('历史活动对比', style={'color': '#333', 'marginBottom': '15px'}),
-                _build_history_comparison_panel(eval_result['历史对比'])
+                html.H3('各活动对比分析', style={'color': '#333', 'marginBottom': '15px'}),
+                _build_activity_comparison_panel(eval_result['活动对比'])
             ], style={
                 'backgroundColor': 'white', 'borderRadius': '10px',
                 'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
                 'padding': '20px', 'margin': '20px 10px'
             })
         ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0'}),
+
+        html.Div([
+            html.H3('各活动评分对比明细', style={'color': '#333', 'marginBottom': '15px'}),
+            _build_all_activities_table(eval_result['活动对比'])
+        ], style={
+            'backgroundColor': 'white', 'borderRadius': '10px',
+            'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            'padding': '25px', 'margin': '20px'
+        }),
 
         html.Div([
             html.H3('核心指标详细分析', style={'color': '#333', 'marginBottom': '20px'}),
@@ -1264,62 +1360,62 @@ def build_eval_results_content(eval_result):
     return html.Div(children)
 
 
-def _build_history_comparison_panel(history_data):
+def _build_activity_comparison_panel(comp_data):
     children = []
 
     children.append(html.Div([
         html.Div([
-            html.Div('历史排名', style={
+            html.Div('总排名', style={
                 'color': '#666', 'fontSize': '13px', 'marginBottom': '4px'
             }),
-            html.Div(history_data['历史排名'], style={
+            html.Div(comp_data['总排名'], style={
                 'fontSize': '20px', 'fontWeight': 'bold', 'color': '#2E86AB'
             })
         ], style={'textAlign': 'center', 'flex': '1', 'padding': '10px'}),
 
         html.Div([
-            html.Div('相对历史平均', style={
+            html.Div('相对其他活动平均', style={
                 'color': '#666', 'fontSize': '13px', 'marginBottom': '4px'
             }),
             html.Div(
-                f"{history_data['相对历史平均']:+.2f}分",
+                f"{comp_data['相对其他活动平均']:+.2f}分",
                 style={
                     'fontSize': '20px', 'fontWeight': 'bold',
-                    'color': '#27ae60' if history_data['相对历史平均'] >= 0 else '#e74c3c'
+                    'color': '#27ae60' if comp_data['相对其他活动平均'] >= 0 else '#e74c3c'
                 }
             )
         ], style={'textAlign': 'center', 'flex': '1', 'padding': '10px'}),
 
         html.Div([
-            html.Div('历史最高分', style={
+            html.Div('其他活动最高分', style={
                 'color': '#666', 'fontSize': '13px', 'marginBottom': '4px'
             }),
-            html.Div(f"{history_data['历史最高分']:.2f}", style={
+            html.Div(f"{comp_data['其他活动最高分']:.2f}", style={
                 'fontSize': '20px', 'fontWeight': 'bold', 'color': '#F18F01'
             })
         ], style={'textAlign': 'center', 'flex': '1', 'padding': '10px'})
     ], style={'display': 'flex', 'marginBottom': '15px', 'padding': '10px', 'backgroundColor': '#f8f9fa', 'borderRadius': '8px'}))
 
     children.append(html.Div([
-        html.Div(history_data['对比结论'], style={
+        html.Div(comp_data['对比结论'], style={
             'padding': '12px', 'backgroundColor': '#eaf4fb',
             'borderRadius': '6px', 'color': '#2E86AB',
             'fontSize': '13px', 'lineHeight': '1.6'
         })
     ], style={'marginBottom': '15px'}))
 
-    dim_data = history_data['维度对比']
+    dim_data = comp_data['维度对比']
     dim_rows = []
     for dim, info in dim_data.items():
         dim_rows.append({
             '评估维度': dim,
             '当前评分': info['当前评分'],
-            '历史平均': info['历史平均'],
+            '其他活动平均': info['其他活动平均'],
             '差异': f"{info['差异']:+.2f}"
         })
 
     children.append(html.Div([
-        html.Label('各维度与历史对比', style={
+        html.Label('各维度与其他活动对比', style={
             'fontWeight': 'bold', 'color': '#333',
             'fontSize': '13px', 'marginBottom': '8px', 'display': 'block'
         }),
@@ -1328,7 +1424,7 @@ def _build_history_comparison_panel(history_data):
             columns=[
                 {'name': '评估维度', 'id': '评估维度'},
                 {'name': '当前评分', 'id': '当前评分'},
-                {'name': '历史平均', 'id': '历史平均'},
+                {'name': '其他活动平均', 'id': '其他活动平均'},
                 {'name': '差异', 'id': '差异'}
             ],
             style_cell={'padding': '8px', 'textAlign': 'center', 'fontSize': '13px'},
@@ -1343,8 +1439,53 @@ def _build_history_comparison_panel(history_data):
     return html.Div(children)
 
 
+def _build_all_activities_table(comp_data):
+    rows = comp_data['各活动评分明细表']
+
+    def _style_row(row):
+        if row['对比结果'] == '当前活动':
+            return {'backgroundColor': '#eaf4fb', 'fontWeight': 'bold'}
+        return {}
+
+    return dash_table.DataTable(
+        data=rows,
+        columns=[
+            {'name': '活动名称', 'id': '活动名称'},
+            {'name': '综合评分', 'id': '综合评分'},
+            {'name': '投资回报', 'id': '投资回报'},
+            {'name': '销售增量', 'id': '销售增量'},
+            {'name': '客户获取', 'id': '客户获取'},
+            {'name': '利润边际', 'id': '利润边际'},
+            {'name': '评级', 'id': '评级'},
+            {'name': '对比结果', 'id': '对比结果'}
+        ],
+        style_cell={'padding': '10px', 'textAlign': 'center', 'fontSize': '13px'},
+        style_header={
+            'backgroundColor': '#f0f0f0', 'fontWeight': 'bold',
+            'fontSize': '13px', 'textAlign': 'center'
+        },
+        style_data_conditional=[
+            {
+                'if': {'filter_query': '{对比结果} = "当前活动"'},
+                'backgroundColor': '#eaf4fb',
+                'fontWeight': 'bold'
+            },
+            {
+                'if': {'filter_query': '{对比结果} = "优于"'},
+                'color': '#27ae60'
+            },
+            {
+                'if': {'filter_query': '{对比结果} = "劣于"'},
+                'color': '#e74c3c'
+            }
+        ],
+        style_table={'overflowX': 'auto'},
+        sort_action='native'
+    )
+
+
 def _build_detail_tables(eval_result):
-    roi = eval_result['ROI分析']
+    roi = eval_result['投资回报分析']
     inc = eval_result['增量销售分析']
     cac = eval_result['客户获取分析']
     margin = eval_result['利润边际分析']
@@ -1385,7 +1526,7 @@ def _build_detail_tables(eval_result):
 
     return html.Div([
         html.Div([
-            _make_table(roi, '📊 ROI 投资回报分析', 'ROI等级'),
+            _make_table(roi, '📊 投资回报分析', '评级'),
             _make_table(inc, '📈 增量销售分析', '提升等级')
         ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '20px', 'marginBottom': '20px'}),
         html.Div([
@@ -1397,9 +1538,12 @@ def _build_detail_tables(eval_result):
 
 @callback(
     Output('eval-config-container', 'children'),
-    Input('stored-data', 'data')
+    Input('stored-data', 'data'),
+    prevent_initial_call=False
 )
 def render_eval_config(df_json):
+    if df_json is None:
+        return html.Div()
     return build_eval_config_content(df_json)
 
 
@@ -1408,9 +1552,13 @@ def render_eval_config(df_json):
     Input('weight-roi', 'value'),
     Input('weight-lift', 'value'),
     Input('weight-cac', 'value'),
-    Input('weight-margin', 'value')
+    Input('weight-margin', 'value'),
+    prevent_initial_call=True
 )
 def update_weight_summary(w_roi, w_lift, w_cac, w_margin):
+    if w_roi is None or w_lift is None or w_cac is None or w_margin is None:
+        return dash.no_update
+
     total = w_roi + w_lift + w_cac + w_margin
     if total == 0:
         return html.Div('⚠️ 权重总和不能为 0，请调整权重配置', style={'color': '#e74c3c'})
@@ -1421,7 +1569,7 @@ def update_weight_summary(w_roi, w_lift, w_cac, w_margin):
     n_margin = w_margin / total * 100
 
     return (
-        f'归一化后权重 → ROI: {n_roi:.1f}% | '
+        f'归一化后权重 → 投资回报: {n_roi:.1f}% | '
         f'销售增量: {n_lift:.1f}% | '
         f'客户获取: {n_cac:.1f}% | '
         f'利润边际: {n_margin:.1f}%'
@@ -1430,31 +1578,71 @@ def update_weight_summary(w_roi, w_lift, w_cac, w_margin):
 
 @callback(
     Output('eval-results-container', 'children'),
-    Input('stored-data', 'data'),
-    Input('eval-activity-select', 'value'),
-    Input('weight-roi', 'value'),
-    Input('weight-lift', 'value'),
-    Input('weight-cac', 'value'),
-    Input('weight-margin', 'value')
+    Output('eval-result-store', 'data'),
+    Input('btn-generate-eval', 'n_clicks'),
+    State('stored-data', 'data'),
+    State('eval-activity-select', 'value'),
+    State('weight-roi', 'value'),
+    State('weight-lift', 'value'),
+    State('weight-cac', 'value'),
+    State('weight-margin', 'value'),
+    State('input-promo-cost', 'value'),
+    State('input-new-customers', 'value'),
+    prevent_initial_call=True
 )
-def update_eval_results(df_json, activity_type, w_roi, w_lift, w_cac, w_margin):
+def generate_eval_results(n_clicks, df_json, activity_type, w_roi, w_lift, w_cac, w_margin, promo_cost, new_customers):
+    if n_clicks is None or n_clicks == 0:
+        return html.Div(), None
+
     if df_json is None or activity_type is None:
-        return html.Div()
+        return html.Div([
+            html.Div('⚠️ 请先上传有效数据并选择促销活动', style={
+                'color': '#e74c3c', 'padding': '20px',
+                'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                'textAlign': 'center'
+            })
+        ], None)
+
+    if w_roi is None or w_lift is None or w_cac is None or w_margin is None:
+        return dash.no_update, dash.no_update
 
     total = w_roi + w_lift + w_cac + w_margin
     if total == 0:
-        return html.Div()
+        return html.Div([
+            html.Div('⚠️ 权重总和不能为 0，请调整权重配置', style={
+                'color': '#e74c3c', 'padding': '20px',
+                'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                'textAlign': 'center'
+            })
+        ], None)
 
     weights = {
-        'ROI': w_roi / total,
+        '投资回报': w_roi / total,
         '销售增量': w_lift / total,
         '客户获取': w_cac / total,
         '利润边际': w_margin / total
     }
 
     df = pd.read_json(df_json, orient='split')
-    eval_result = evaluate_promo_activity(df, activity_type, weights)
-    return build_eval_results_content(eval_result)
+
+    actual_promo_cost = float(promo_cost) if promo_cost is not None and promo_cost > 0 else None
+    actual_new_customers = int(new_customers) if new_customers is not None and new_customers > 0 else None
+
+    try:
+        eval_result = evaluate_promo_activity(
+            df, activity_type, weights,
+            promo_cost=actual_promo_cost,
+            new_customers=actual_new_customers
+        )
+        return build_eval_results_content(eval_result), eval_result
+    except Exception as e:
+        return html.Div([
+            html.Div(f'❌ 评估失败：{str(e)}', style={
+                'color': '#e74c3c', 'padding': '20px',
+                'backgroundColor': '#fdecea', 'borderRadius': '8px',
+                'textAlign': 'center'
+            })
+        ], None)
 
 
 if __name__ == '__main__':
