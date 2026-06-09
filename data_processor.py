@@ -236,25 +236,24 @@ def aggregate_by_time_granularity(
     granularity: str = '日',
     group_col: Optional[str] = None
 ) -> pd.DataFrame:
-    result_df = df.copy()
+    result_df = df.copy().reset_index(drop=True)
+    result_df['_row_order'] = result_df.index
+
+    is_datetime_parsed = False
 
     if not pd.api.types.is_datetime64_any_dtype(result_df[time_col]):
         result_df['_parsed_time'] = try_parse_datetime(result_df[time_col])
         if result_df['_parsed_time'].isna().all():
             result_df['时间'] = result_df[time_col].astype(str)
             agg_col = '时间'
+            is_datetime_parsed = False
         else:
             result_df[time_col] = result_df['_parsed_time']
-            if granularity == '日':
-                result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
-            elif granularity == '周':
-                result_df['时间'] = result_df[time_col].dt.strftime('%Y-W%W')
-            elif granularity == '月':
-                result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m')
-            else:
-                result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
-            agg_col = '时间'
+            is_datetime_parsed = True
     else:
+        is_datetime_parsed = True
+
+    if is_datetime_parsed:
         if granularity == '日':
             result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
         elif granularity == '周':
@@ -265,10 +264,23 @@ def aggregate_by_time_granularity(
             result_df['时间'] = result_df[time_col].dt.strftime('%Y-%m-%d')
         agg_col = '时间'
 
+    result_df['_sort_key'] = result_df['时间'] if is_datetime_parsed else result_df['_row_order']
+
     if group_col and group_col in result_df.columns:
+        order_df = result_df.groupby([agg_col, group_col], as_index=False)['_sort_key'].min()
         agg_df = result_df.groupby([agg_col, group_col], as_index=False)[value_col].sum()
+        agg_df = agg_df.merge(order_df, on=[agg_col, group_col])
     else:
+        order_df = result_df.groupby([agg_col], as_index=False)['_sort_key'].min()
         agg_df = result_df.groupby([agg_col], as_index=False)[value_col].sum()
+        agg_df = agg_df.merge(order_df, on=[agg_col])
+
+    if is_datetime_parsed:
+        agg_df = agg_df.sort_values('_sort_key').reset_index(drop=True)
+    else:
+        agg_df = agg_df.sort_values('_sort_key').reset_index(drop=True)
+
+    agg_df = agg_df.drop(columns=['_sort_key'])
 
     return agg_df
 
@@ -284,7 +296,7 @@ def calculate_growth_rate(df: pd.DataFrame, value_col: str = '销售额') -> Dic
     if len(df) < 2:
         return result
 
-    sorted_df = df.sort_values('时间').reset_index(drop=True)
+    sorted_df = df.reset_index(drop=True)
     values = sorted_df[value_col].values
 
     total_first = values[0]
@@ -327,7 +339,7 @@ def detect_seasonality(df: pd.DataFrame, value_col: str = '销售额') -> Dict[s
     if len(df) < 4:
         return result
 
-    sorted_df = df.sort_values('时间').reset_index(drop=True)
+    sorted_df = df.reset_index(drop=True)
     values = sorted_df[value_col].values
     times = sorted_df['时间'].values
 
@@ -367,7 +379,7 @@ def detect_anomalies(df: pd.DataFrame, value_col: str = '销售额') -> List[Dic
     if len(df) < 4:
         return anomalies
 
-    sorted_df = df.sort_values('时间').reset_index(drop=True)
+    sorted_df = df.reset_index(drop=True)
     values = sorted_df[value_col].values
     times = sorted_df['时间'].values
 

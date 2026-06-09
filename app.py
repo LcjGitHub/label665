@@ -11,7 +11,7 @@ from data_processor import (
 )
 from trend_charts import (
     create_line_chart, create_area_chart,
-    create_combined_chart, create_moving_average_chart
+    create_combined_chart
 )
 
 app = dash.Dash(__name__)
@@ -251,19 +251,8 @@ def trend_page():
                 'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
                 'padding': '20px',
                 'margin': '20px 10px'
-            }),
-
-            html.Div([
-                html.H3('销售额及移动平均趋势', style={'color': '#333', 'marginBottom': '15px'}),
-                dcc.Graph(id='trend-ma-chart')
-            ], style={
-                'backgroundColor': 'white',
-                'borderRadius': '10px',
-                'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
-                'padding': '20px',
-                'margin': '20px 10px'
             })
-        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '0', 'marginTop': '0'}),
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr', 'gap': '0', 'marginTop': '0'}),
 
         html.Div(id='trend-analysis-conclusion', style={
             'backgroundColor': 'white',
@@ -389,15 +378,26 @@ def build_quality_report_content(report):
                     'fontWeight': 'bold',
                     'fontSize': '16px'
                 }),
-                dcc.Link('前往分析页面', href='/analysis', style={
-                    'backgroundColor': 'white',
-                    'color': '#27ae60',
-                    'padding': '8px 20px',
-                    'borderRadius': '5px',
-                    'textDecoration': 'none',
-                    'fontWeight': 'bold',
-                    'marginLeft': '20px'
-                })
+                html.Div([
+                    dcc.Link('前往促销分析', href='/analysis', style={
+                        'backgroundColor': 'white',
+                        'color': '#27ae60',
+                        'padding': '8px 20px',
+                        'borderRadius': '5px',
+                        'textDecoration': 'none',
+                        'fontWeight': 'bold',
+                        'marginLeft': '15px'
+                    }),
+                    dcc.Link('前往趋势分析', href='/trend', style={
+                        'backgroundColor': 'white',
+                        'color': '#2E86AB',
+                        'padding': '8px 20px',
+                        'borderRadius': '5px',
+                        'textDecoration': 'none',
+                        'fontWeight': 'bold',
+                        'marginLeft': '15px'
+                    })
+                ], style={'display': 'flex', 'alignItems': 'center'})
             ], style={
                 'display': 'flex',
                 'alignItems': 'center',
@@ -546,7 +546,7 @@ def build_analysis_content(df_json):
 @callback(
     Output('navbar-container', 'children'),
     Input('url', 'pathname'),
-    State('stored-data', 'data')
+    Input('stored-data', 'data')
 )
 def render_navbar(pathname, stored_data):
     data_valid = stored_data is not None
@@ -764,69 +764,26 @@ def render_trend_filters(df_json):
                 placeholder='选择地区（可多选）',
                 style={'width': '100%'}
             )
-        ], style={'flex': '1', 'minWidth': '200px', 'marginRight': '20px'}))
-
-    if dimensions.get('类型'):
-        filter_row.append(html.Div([
-            html.Label('销售类型', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
-            dcc.Dropdown(
-                id='type-filter',
-                options=[{'label': t, 'value': t} for t in dimensions['类型']],
-                value=None,
-                multi=True,
-                placeholder='选择类型（可多选）',
-                style={'width': '100%'}
-            )
         ], style={'flex': '1', 'minWidth': '200px'}))
 
     if filter_row:
         children.append(html.Div(filter_row, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'alignItems': 'flex-end'}))
 
-    children.append(html.Div([
-        html.Label('分组维度', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
-        dcc.Dropdown(
-            id='group-dimension',
-            options=[{'label': '不分组', 'value': 'none'}] + [
-                {'label': k, 'value': k} for k in dimensions.keys()
-            ],
-            value='none',
-            placeholder='选择图表分组维度',
-            style={'width': '100%'}
-        )
-    ], style={'marginTop': '20px'}))
-
-    children.append(html.Div([
-        html.Label('移动平均期数', style={'fontWeight': 'bold', 'color': '#333', 'marginBottom': '8px', 'display': 'block'}),
-        dcc.Slider(
-            id='ma-window',
-            min=2,
-            max=min(10, len(df) if len(df) > 2 else 3),
-            step=1,
-            value=3,
-            marks={i: str(i) for i in range(2, min(11, (len(df) if len(df) > 2 else 4)))},
-            tooltip={'placement': 'bottom'}
-        )
-    ], style={'marginTop': '20px'}))
-
     return html.Div(children)
 
 
-def process_trend_data(df_json, granularity, categories, regions, types, group_dim):
+def process_trend_data(df_json, granularity, categories, regions):
     if df_json is None:
         return None, None
 
     df = pd.read_json(df_json, orient='split')
-    df = filter_data(df, categories, regions, types)
+    df = filter_data(df, categories, regions, None)
 
     if len(df) == 0:
         return None, None
 
     time_col = '期间' if '期间' in df.columns else df.columns[0]
-    group_col = None
-    if group_dim and group_dim != 'none':
-        group_col = group_dim
-
-    agg_df = aggregate_by_time_granularity(df, time_col, '销售额', granularity, group_col)
+    agg_df = aggregate_by_time_granularity(df, time_col, '销售额', granularity, None)
 
     return df, agg_df
 
@@ -835,17 +792,13 @@ def process_trend_data(df_json, granularity, categories, regions, types, group_d
     Output('trend-line-chart', 'figure'),
     Output('trend-area-chart', 'figure'),
     Output('trend-combined-chart', 'figure'),
-    Output('trend-ma-chart', 'figure'),
     Output('trend-analysis-conclusion', 'children'),
     Input('stored-data', 'data'),
     Input('time-granularity', 'value'),
     Input('category-filter', 'value'),
-    Input('region-filter', 'value'),
-    Input('type-filter', 'value'),
-    Input('group-dimension', 'value'),
-    Input('ma-window', 'value')
+    Input('region-filter', 'value')
 )
-def update_trend_charts(df_json, granularity, categories, regions, types, group_dim, ma_window):
+def update_trend_charts(df_json, granularity, categories, regions):
     if df_json is None:
         empty_fig = {
             'data': [],
@@ -853,9 +806,9 @@ def update_trend_charts(df_json, granularity, categories, regions, types, group_
                 'title': {'text': '暂无数据', 'x': 0.5},
                 'xaxis': {'visible': False},
                 'yaxis': {'visible': False}}}
-        return empty_fig, empty_fig, empty_fig, empty_fig, html.Div()
+        return empty_fig, empty_fig, empty_fig, html.Div()
 
-    original_df, agg_df = process_trend_data(df_json, granularity, categories, regions, types, group_dim)
+    original_df, agg_df = process_trend_data(df_json, granularity, categories, regions)
 
     if agg_df is None or len(agg_df) == 0 or agg_df.empty:
         empty_fig = {
@@ -868,24 +821,18 @@ def update_trend_charts(df_json, granularity, categories, regions, types, group_
                     'text': '请选择筛选条件后查看数据',
                     'showarrow': False,
                     'font': {'size': 16}}]}}
-        return empty_fig, empty_fig, empty_fig, empty_fig, html.Div('暂无数据，请调整筛选条件')
+        return empty_fig, empty_fig, empty_fig, html.Div('暂无数据，请调整筛选条件')
 
-    group_col = group_dim if group_dim and group_dim != 'none' else None
-
-    line_fig = create_line_chart(agg_df, group_col=group_col,
+    line_fig = create_line_chart(agg_df, group_col=None,
                             title=f'销售趋势折线图（{granularity}度）')
-    area_fig = create_area_chart(agg_df, group_col=group_col,
+    area_fig = create_area_chart(agg_df, group_col=None,
                                 title=f'销售趋势面积图（{granularity}度）')
-    combined_fig = create_combined_chart(agg_df, group_col=group_col,
+    combined_fig = create_combined_chart(agg_df, group_col=None,
                                title=f'销售趋势组合图（{granularity}度）')
 
-    ma_df = agg_df.groupby('时间', as_index=False)['销售额'].sum() if group_col else agg_df
-    ma_fig = create_moving_average_chart(ma_df, window=ma_window or 3,
-                                  title=f'销售额及{ma_window or 3}期移动平均（{granularity}度）')
+    conclusion = build_trend_conclusion(agg_df, original_df)
 
-    conclusion = build_trend_conclusion(ma_df, original_df)
-
-    return line_fig, area_fig, combined_fig, ma_fig, conclusion
+    return line_fig, area_fig, combined_fig, conclusion
 
 
 def build_trend_conclusion(agg_df, original_df):

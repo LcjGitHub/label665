@@ -22,7 +22,7 @@ def create_line_chart(
     if group_col and group_col in df.columns:
         groups = df[group_col].unique()
         for i, group in enumerate(groups):
-            group_df = df[df[group_col] == group].sort_values(time_col)
+            group_df = df[df[group_col] == group]
             color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
             fig.add_trace(go.Scatter(
                 x=group_df[time_col],
@@ -34,7 +34,7 @@ def create_line_chart(
                 hovertemplate=f'<b>{group}</b><br>时间: %{{x}}<br>销售额: %{{y:,.0f}}<extra></extra>'
             ))
     else:
-        sorted_df = df.sort_values(time_col)
+        sorted_df = df
         fig.add_trace(go.Scatter(
             x=sorted_df[time_col],
             y=sorted_df[value_col],
@@ -74,7 +74,7 @@ def create_area_chart(
     if group_col and group_col in df.columns:
         groups = df[group_col].unique()
         for i, group in enumerate(groups):
-            group_df = df[df[group_col] == group].sort_values(time_col)
+            group_df = df[df[group_col] == group]
             color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
             fig.add_trace(go.Scatter(
                 x=group_df[time_col],
@@ -87,7 +87,7 @@ def create_area_chart(
                 hovertemplate=f'<b>{group}</b><br>时间: %{{x}}<br>销售额: %{{y:,.0f}}<extra></extra>'
             ))
     else:
-        sorted_df = df.sort_values(time_col)
+        sorted_df = df
         fig.add_trace(go.Scatter(
             x=sorted_df[time_col],
             y=sorted_df[value_col],
@@ -128,7 +128,7 @@ def create_combined_chart(
     if group_col and group_col in df.columns:
         groups = df[group_col].unique()
         for i, group in enumerate(groups):
-            group_df = df[df[group_col] == group].sort_values(time_col)
+            group_df = df[df[group_col] == group]
             color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
             fig.add_trace(go.Bar(
                 x=group_df[time_col],
@@ -140,7 +140,7 @@ def create_combined_chart(
             ))
 
         for i, group in enumerate(groups):
-            group_df = df[df[group_col] == group].sort_values(time_col)
+            group_df = df[df[group_col] == group]
             color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
             fig.add_trace(go.Scatter(
                 x=group_df[time_col],
@@ -153,7 +153,7 @@ def create_combined_chart(
                 hovertemplate=f'<b>{group} 趋势</b><br>时间: %{{x}}<br>销售额: %{{y:,.0f}}<extra></extra>'
             ))
     else:
-        sorted_df = df.sort_values(time_col)
+        sorted_df = df
         fig.add_trace(go.Bar(
             x=sorted_df[time_col],
             y=sorted_df[value_col],
@@ -197,7 +197,7 @@ def create_moving_average_chart(
     window: int = 3,
     title: str = '销售额及移动平均趋势'
 ) -> go.Figure:
-    sorted_df = df.sort_values(time_col).copy()
+    sorted_df = df.copy()
     sorted_df['移动平均'] = sorted_df[value_col].rolling(window=window, min_periods=1).mean()
 
     fig = go.Figure()
